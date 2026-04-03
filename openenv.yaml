@@ -1,0 +1,7 @@
+spec_version: 1
+schema_version: 1.0.0
+name: shopOps
+type: space
+runtime: fastapi
+app: server.app:app
+port: 8000
