@@ -145,8 +145,11 @@ Required environment variables:
 
 Example:
 ```bash
-export API_BASE_URL=\"https://api.openai.com/v1\"
-export MODEL_NAME=\"gpt-4o\"\nexport HF_TOKEN=\"<your_key>\"\nexport ENV_URL=\"http://localhost:8000\"\npython inference.py
+export API_BASE_URL="https://api.openai.com/v1"
+export MODEL_NAME="gpt-4o"
+export HF_TOKEN="<your_key>"
+export ENV_URL="http://localhost:8000"
+python inference.py
 ```
 
 ## Test Results
@@ -155,6 +158,7 @@ Latest scenario test report:
 
 ```
 outputs/test_report.txt
+outputs/test_report_full.txt
 ```
 
 ## Building the Docker Image
@@ -166,7 +170,13 @@ docker build -t shopOps-env:latest -f server/Dockerfile .
 ## Running Locally
 
 ```bash
-uvicorn server.app:app --reload
+uvicorn shopOps.server.app:app --reload --host 0.0.0.0 --port 8000
+```
+
+Or:
+
+```bash
+python -m shopOps.server.app
 ```
 
 ## Deploying to Hugging Face Spaces
@@ -179,7 +189,7 @@ openenv push
 
 ```
 shopOps/
-├── openenv.yaml           # OpenEnv manifest (includes schema_version)
+├── openenv.yaml           # OpenEnv manifest
 ├── client.py              # ShopOpsEnv client
 ├── models.py              # Action/observation models
 ├── eval.py                # Baseline evaluation runner
