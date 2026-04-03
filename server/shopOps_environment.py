@@ -20,20 +20,36 @@ import random
 from openenv.core.env_server.interfaces import Environment
 from openenv.core.env_server.types import State
 
-from ..models import (
-    ActionType,
-    CaseType,
-    CaseView,
-    CustomerTier,
-    DeliveryStatus,
-    EscalationReason,
-    FraudSignal,
-    IssueSeverity,
-    ItemCategory,
-    Resources,
-    ShopopsAction,
-    ShopopsObservation,
-)
+try:
+    from ..models import (
+        ActionType,
+        CaseType,
+        CaseView,
+        CustomerTier,
+        DeliveryStatus,
+        EscalationReason,
+        FraudSignal,
+        IssueSeverity,
+        ItemCategory,
+        Resources,
+        ShopopsAction,
+        ShopopsObservation,
+    )
+except ImportError:
+    from models import (
+        ActionType,
+        CaseType,
+        CaseView,
+        CustomerTier,
+        DeliveryStatus,
+        EscalationReason,
+        FraudSignal,
+        IssueSeverity,
+        ItemCategory,
+        Resources,
+        ShopopsAction,
+        ShopopsObservation,
+    )
 
 ENV_SCHEMA_VERSION = "1.0.0"
 
@@ -89,6 +105,7 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
     """
 
     SUPPORTS_CONCURRENT_SESSIONS: bool = True
+    _EPISODE_STORE: Dict[str, Dict[str, object]] = {}
 
     def __init__(self, debug_mode: bool = False):
         super().__init__()
@@ -106,6 +123,42 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
         self._split = "train"
         self._expose_expected_action = False
         self._state = State(episode_id=str(uuid4()), step_count=0)
+
+    def _snapshot_state(self) -> Dict[str, object]:
+        return {
+            "episode_id": self._state.episode_id,
+            "step_count": self._state.step_count,
+            "cases": list(self._cases),
+            "case_index": self._case_index,
+            "time_used": self._time_used,
+            "budget_used": self._budget_used,
+            "invalid_count": self._invalid_count,
+            "cumulative_score": self._cumulative_score,
+            "case_results": list(self._case_results),
+            "adversarial_case_ids": set(self._adversarial_case_ids),
+            "tier": self._tier,
+            "split": self._split,
+            "debug_mode": self._debug_mode,
+            "expose_expected_action": self._expose_expected_action,
+        }
+
+    def _load_state(self, snapshot: Dict[str, object]) -> None:
+        self._state = State(
+            episode_id=str(snapshot["episode_id"]),
+            step_count=int(snapshot["step_count"]),
+        )
+        self._cases = list(snapshot["cases"])  # type: ignore[list-item]
+        self._case_index = int(snapshot["case_index"])
+        self._time_used = int(snapshot["time_used"])
+        self._budget_used = float(snapshot["budget_used"])
+        self._invalid_count = int(snapshot["invalid_count"])
+        self._cumulative_score = float(snapshot["cumulative_score"])
+        self._case_results = list(snapshot["case_results"])  # type: ignore[list-item]
+        self._adversarial_case_ids = set(snapshot["adversarial_case_ids"])  # type: ignore[arg-type]
+        self._tier = str(snapshot["tier"])
+        self._split = str(snapshot["split"])
+        self._debug_mode = bool(snapshot["debug_mode"])
+        self._expose_expected_action = bool(snapshot["expose_expected_action"])
 
     def reset(
         self,
@@ -137,6 +190,7 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
             episode_id=episode_id or str(uuid4()),
             step_count=0,
         )
+        ShopopsEnvironment._EPISODE_STORE[self._state.episode_id] = self._snapshot_state()
 
         info = {"reset": True}
         if self._cases:
@@ -147,8 +201,17 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
         self,
         action: ShopopsAction,
         timeout_s: Optional[float] = None,
+        episode_id: Optional[str] = None,
         **kwargs: object,
     ) -> ShopopsObservation:
+        if episode_id:
+            snapshot = ShopopsEnvironment._EPISODE_STORE.get(episode_id)
+            if snapshot is None:
+                raise RuntimeError(f"Unknown episode_id: {episode_id}")
+            self._load_state(snapshot)
+        elif not self._cases:
+            raise RuntimeError("Episode not initialized. Call reset() first.")
+
         if self._is_done():
             return self._build_observation(reward=0.0, done=True, info={"already_done": True})
 
@@ -237,7 +300,11 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
             info["termination_reason"] = self._termination_reason()
             info["episode_summary"] = self._episode_summary()
 
-        return self._build_observation(reward=reward, done=done, info=info)
+        obs = self._build_observation(reward=reward, done=done, info=info)
+        ShopopsEnvironment._EPISODE_STORE[self._state.episode_id] = self._snapshot_state()
+        if done:
+            ShopopsEnvironment._EPISODE_STORE.pop(self._state.episode_id, None)
+        return obs
 
     @property
     def state(self) -> State:
@@ -260,21 +327,39 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
 
             hidden_fields = self._select_hidden_fields(case_type, delivery_status)
 
+            case = CaseInternal(
+                case_id=f"case-{idx+1:03d}",
+                case_type=case_type,
+                customer_tier=customer_tier,
+                order_value_usd=order_value,
+                days_since_order=days_since_order,
+                delivery_status=delivery_status,
+                issue_severity=issue_severity,
+                fraud_score=fraud_score,
+                item_category=item_category,
+                return_window_open=return_window_open,
+                evidence_provided=evidence_provided,
+                prior_refund_count=prior_refund_count,
+                hidden_fields=hidden_fields,
+            )
+            if self._tier == "hard":
+                case = self._apply_ambiguity(case)
+
             cases.append(
                 CaseInternal(
-                    case_id=f"case-{idx+1:03d}",
-                    case_type=case_type,
-                    customer_tier=customer_tier,
-                    order_value_usd=order_value,
-                    days_since_order=days_since_order,
-                    delivery_status=delivery_status,
-                    issue_severity=issue_severity,
-                    fraud_score=fraud_score,
-                    item_category=item_category,
-                    return_window_open=return_window_open,
-                    evidence_provided=evidence_provided,
-                    prior_refund_count=prior_refund_count,
-                    hidden_fields=hidden_fields,
+                    case_id=case.case_id,
+                    case_type=case.case_type,
+                    customer_tier=case.customer_tier,
+                    order_value_usd=case.order_value_usd,
+                    days_since_order=case.days_since_order,
+                    delivery_status=case.delivery_status,
+                    issue_severity=case.issue_severity,
+                    fraud_score=case.fraud_score,
+                    item_category=case.item_category,
+                    return_window_open=case.return_window_open,
+                    evidence_provided=case.evidence_provided,
+                    prior_refund_count=case.prior_refund_count,
+                    hidden_fields=case.hidden_fields,
                 )
             )
         if self._tier == "hard" and self._split == "test":
@@ -300,69 +385,55 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
 
     def _inject_adversarial_cases(self, cases: List[CaseInternal]) -> List[CaseInternal]:
         adversarial = self._adversarial_templates()
-        for idx, template in enumerate(adversarial):
-            if idx >= len(cases):
-                break
-            cases[idx] = template
+        positions = self._rng.sample(range(len(cases)), k=min(len(adversarial), len(cases)))
+        for pos, template in zip(positions, adversarial):
+            cases[pos] = template
         return cases
 
     def _adversarial_templates(self) -> List[CaseInternal]:
         templates: List[CaseInternal] = []
-        templates.append(
-            CaseInternal(
-                case_id="adv-001",
-                case_type=CaseType.FRAUD_SIGNAL,
-                customer_tier=CustomerTier.GOLD,
-                order_value_usd=850.0,
-                days_since_order=8,
-                delivery_status=None,
-                issue_severity=IssueSeverity.MEDIUM,
-                fraud_score=0.25,
-                item_category=ItemCategory.ELECTRONICS,
-                return_window_open=True,
-                evidence_provided=False,
-                prior_refund_count=1,
-                hidden_fields={"order_value_bucket"},
-                adversarial=True,
+        for idx in range(5):
+            case_type = self._rng.choice(
+                [CaseType.FRAUD_SIGNAL, CaseType.DELIVERY_ISSUE, CaseType.REFUND_REQUEST]
             )
-        )
-        templates.append(
-            CaseInternal(
-                case_id="adv-002",
-                case_type=CaseType.DELIVERY_ISSUE,
-                customer_tier=CustomerTier.PLATINUM,
-                order_value_usd=420.0,
-                days_since_order=32,
-                delivery_status=DeliveryStatus.DELAYED,
-                issue_severity=IssueSeverity.HIGH,
-                fraud_score=0.15,
-                item_category=ItemCategory.HOME,
-                return_window_open=False,
-                evidence_provided=True,
-                prior_refund_count=0,
-                hidden_fields={"delivery_status"},
-                adversarial=True,
+            order_value = round(self._rng.uniform(350, 900), 2)
+            days_since_order = self._rng.randint(5, 40)
+            delivery_status = (
+                self._rng.choice([DeliveryStatus.DELAYED, DeliveryStatus.LOST])
+                if case_type == CaseType.DELIVERY_ISSUE
+                else None
             )
-        )
-        templates.append(
-            CaseInternal(
-                case_id="adv-003",
-                case_type=CaseType.REFUND_REQUEST,
-                customer_tier=CustomerTier.SILVER,
-                order_value_usd=120.0,
-                days_since_order=29,
-                delivery_status=None,
-                issue_severity=IssueSeverity.LOW,
-                fraud_score=0.78,
-                item_category=ItemCategory.BEAUTY,
-                return_window_open=True,
-                evidence_provided=False,
-                prior_refund_count=3,
-                hidden_fields={"prior_refund_count_bucket"},
-                adversarial=True,
+            fraud_score = self._rng.uniform(0.3, 0.7)
+            prior_refunds = self._rng.randint(2, 4)
+            hidden = {self._rng.choice(["order_value_bucket", "order_age_bucket", "prior_refund_count_bucket"])}
+            templates.append(
+                CaseInternal(
+                    case_id=f"adv-{idx+1:03d}",
+                    case_type=case_type,
+                    customer_tier=self._rng.choice([CustomerTier.GOLD, CustomerTier.PLATINUM]),
+                    order_value_usd=order_value,
+                    days_since_order=days_since_order,
+                    delivery_status=delivery_status,
+                    issue_severity=self._rng.choice([IssueSeverity.MEDIUM, IssueSeverity.HIGH]),
+                    fraud_score=fraud_score,
+                    item_category=self._rng.choice([ItemCategory.ELECTRONICS, ItemCategory.HOME]),
+                    return_window_open=days_since_order <= 30,
+                    evidence_provided=self._rng.random() < 0.5,
+                    prior_refund_count=prior_refunds,
+                    hidden_fields=hidden,
+                    adversarial=True,
+                )
             )
-        )
         return templates
+
+    def _apply_ambiguity(self, case: CaseInternal) -> CaseInternal:
+        if self._rng.random() < 0.35:
+            case.customer_tier = self._rng.choice([CustomerTier.GOLD, CustomerTier.PLATINUM])
+            case.order_value_usd = round(self._rng.uniform(450, 900), 2)
+            case.prior_refund_count = self._rng.randint(2, 4)
+            case.fraud_score = self._rng.uniform(0.35, 0.65)
+            case.issue_severity = self._rng.choice([IssueSeverity.MEDIUM, IssueSeverity.HIGH])
+        return case
 
     def _sample_case_type(self) -> CaseType:
         weights = {

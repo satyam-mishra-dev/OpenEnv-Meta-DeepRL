@@ -132,6 +132,23 @@ Outputs JSON metrics to `outputs/evals/` with:
 - Controlled via `--seed` in the eval runner
 - Hard-tier validation seeds available via `--validation`
 
+## Inference Script (Hackathon Compliance)
+
+The repo includes `inference.py` at the project root. It uses the OpenAI client
+and emits strict `[START]`, `[STEP]`, `[END]` logs.
+
+Required environment variables:
+- `API_BASE_URL`
+- `MODEL_NAME`
+- `HF_TOKEN`
+- `ENV_URL` (optional, defaults to `http://localhost:8000`)
+
+Example:
+```bash
+export API_BASE_URL=\"https://api.openai.com/v1\"
+export MODEL_NAME=\"gpt-4o\"\nexport HF_TOKEN=\"<your_key>\"\nexport ENV_URL=\"http://localhost:8000\"\npython inference.py
+```
+
 ## Test Results
 
 Latest scenario test report:

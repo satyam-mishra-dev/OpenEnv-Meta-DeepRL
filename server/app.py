@@ -38,7 +38,7 @@ except Exception as e:  # pragma: no cover
 try:
     from ..models import ShopopsAction, ShopopsObservation
     from .shopOps_environment import ShopopsEnvironment
-except ModuleNotFoundError:
+except (ImportError, ModuleNotFoundError):
     from models import ShopopsAction, ShopopsObservation
     from server.shopOps_environment import ShopopsEnvironment
 

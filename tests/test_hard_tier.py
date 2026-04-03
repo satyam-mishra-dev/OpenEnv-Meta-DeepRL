@@ -30,5 +30,5 @@ def test_hard_tier_adversarial_seed():
     env = ShopopsEnvironment(debug_mode=True)
     obs = env.reset(seed=9001, tier="hard", split="test")
 
-    assert obs.metadata.get("is_adversarial_case") is True
-    assert obs.case.case_id.startswith("adv-")
+    assert env._adversarial_case_ids
+    assert any(case_id.startswith("adv-") for case_id in env._adversarial_case_ids)
