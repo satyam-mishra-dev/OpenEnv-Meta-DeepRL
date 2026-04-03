@@ -1,8 +1,16 @@
 README.md
+__init__.py
+client.py
+conftest.py
+eval.py
+inference.py
+models.py
 pyproject.toml
 ./__init__.py
 ./client.py
+./conftest.py
 ./eval.py
+./inference.py
 ./models.py
 openenv_shopOps.egg-info/PKG-INFO
 openenv_shopOps.egg-info/SOURCES.txt
@@ -13,4 +21,9 @@ openenv_shopOps.egg-info/top_level.txt
 server/__init__.py
 server/app.py
 server/shopOps_environment.py
+tests/test_determinism.py
+tests/test_hard_tier.py
+tests/test_metrics_baselines.py
 tests/test_scenarios.py
+tests/test_schema_contract.py
+tests/test_validation_resources_rewards.py
