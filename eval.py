@@ -26,6 +26,7 @@ from .server.shopOps_environment import ShopopsEnvironment
 
 OUTPUT_DIR = Path("outputs/evals")
 DEFAULT_SPLIT_SEED = 1337
+HARD_VALIDATION_SEEDS = [9001, 9002, 9003, 9004, 9005, 9006, 9007, 9008, 9009, 9010]
 
 
 def generate_seed_split(total: int, train_ratio: float, seed: int) -> tuple[list[int], list[int]]:
@@ -88,9 +89,9 @@ def baseline_policy(obs: ShopopsObservation) -> ShopopsAction:
     return ShopopsAction(action_type=ActionType.REJECT)
 
 
-def run_episode(seed: int, tier: str, debug_mode: bool = False) -> Dict[str, object]:
+def run_episode(seed: int, tier: str, split: str, debug_mode: bool = False) -> Dict[str, object]:
     env = ShopopsEnvironment(debug_mode=debug_mode)
-    obs = env.reset(seed=seed, tier=tier)
+    obs = env.reset(seed=seed, tier=tier, split=split, expose_expected_action=True)
     total_reward = 0.0
     steps = 0
 
@@ -144,15 +145,26 @@ def aggregate_results(results: List[Dict[str, object]]) -> Dict[str, object]:
     }
 
 
-def run_eval(split: str, tier: str, total_seeds: int, train_ratio: float, seed: int) -> Dict[str, object]:
-    train_seeds, test_seeds = generate_seed_split(total_seeds, train_ratio, seed)
-    seeds = train_seeds if split == "train" else test_seeds
+def run_eval(
+    split: str,
+    tier: str,
+    total_seeds: int,
+    train_ratio: float,
+    seed: int,
+    validation: bool,
+) -> Dict[str, object]:
+    if validation and tier == "hard":
+        seeds = HARD_VALIDATION_SEEDS
+    else:
+        train_seeds, test_seeds = generate_seed_split(total_seeds, train_ratio, seed)
+        seeds = train_seeds if split == "train" else test_seeds
 
-    results = [run_episode(seed=value, tier=tier, debug_mode=True) for value in seeds]
+    results = [run_episode(seed=value, tier=tier, split=split, debug_mode=True) for value in seeds]
     return {
         "split": split,
         "tier": tier,
         "seed_count": len(seeds),
+        "validation": validation,
         "results": results,
         "summary": aggregate_results(results),
     }
@@ -165,11 +177,20 @@ def main() -> None:
     parser.add_argument("--total-seeds", type=int, default=200)
     parser.add_argument("--train-ratio", type=float, default=0.8)
     parser.add_argument("--seed", type=int, default=DEFAULT_SPLIT_SEED)
+    parser.add_argument("--validation", action="store_true", help="Use hard-tier validation seeds")
     args = parser.parse_args()
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    payload = run_eval(args.split, args.tier, args.total_seeds, args.train_ratio, args.seed)
-    out_path = OUTPUT_DIR / f"shopops_eval_{args.split}_{args.tier}.json"
+    payload = run_eval(
+        args.split,
+        args.tier,
+        args.total_seeds,
+        args.train_ratio,
+        args.seed,
+        args.validation,
+    )
+    suffix = "validation" if args.validation else args.split
+    out_path = OUTPUT_DIR / f"shopops_eval_{suffix}_{args.tier}.json"
     out_path.write_text(json.dumps(payload, indent=2))
     print(f"Wrote {out_path}")
 

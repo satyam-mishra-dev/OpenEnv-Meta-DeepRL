@@ -56,7 +56,7 @@ finally:
 ### Difficulty Tiers
 - `easy`: full detail
 - `medium`: partial detail
-- `hard`: bucketed values and hidden fields
+- `hard`: bucketed values, hidden fields, and adversarial cases (test split only)
 
 ## Action Space
 
@@ -96,7 +96,7 @@ Instead of `fraud_score`, the agent receives:
 Dense reward per step:
 ```
 reward = 0.6 * correctness
-       + 0.25 * cost_efficiency
+       + 0.25 * (cost_efficiency * correctness)
        + 0.15 * prioritization
 ```
 
@@ -130,6 +130,7 @@ Outputs JSON metrics to `outputs/evals/` with:
 ### Train/Test Split
 - Deterministic split (80/20)
 - Controlled via `--seed` in the eval runner
+- Hard-tier validation seeds available via `--validation`
 
 ## Test Results
 

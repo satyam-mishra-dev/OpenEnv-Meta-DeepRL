@@ -12,8 +12,8 @@ A realistic environment simulating daily e-commerce support operations.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Set, Tuple
 from uuid import uuid4
 import random
 
@@ -77,6 +77,8 @@ class CaseInternal:
     return_window_open: bool
     evidence_provided: bool
     prior_refund_count: int
+    hidden_fields: Set[str] = field(default_factory=set)
+    adversarial: bool = False
 
 
 class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
@@ -99,7 +101,10 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
         self._invalid_count = 0
         self._cumulative_score = 0.0
         self._case_results: List[Tuple[CaseType, bool]] = []
+        self._adversarial_case_ids: Set[str] = set()
         self._tier = "easy"
+        self._split = "train"
+        self._expose_expected_action = False
         self._state = State(episode_id=str(uuid4()), step_count=0)
 
     def reset(
@@ -107,13 +112,18 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
         seed: Optional[int] = None,
         episode_id: Optional[str] = None,
         tier: Optional[str] = None,
+        split: Optional[str] = None,
         debug_mode: Optional[bool] = None,
+        expose_expected_action: Optional[bool] = None,
         **kwargs: object,
     ) -> ShopopsObservation:
         self._rng = random.Random(seed)
         self._tier = tier if tier in {"easy", "medium", "hard"} else "easy"
+        self._split = split if split in {"train", "test"} else "train"
         if debug_mode is not None:
             self._debug_mode = debug_mode
+        if expose_expected_action is not None:
+            self._expose_expected_action = expose_expected_action
 
         self._cases = self._generate_cases()
         self._case_index = 0
@@ -122,12 +132,16 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
         self._invalid_count = 0
         self._cumulative_score = 0.0
         self._case_results = []
+        self._adversarial_case_ids = {case.case_id for case in self._cases if case.adversarial}
         self._state = State(
             episode_id=episode_id or str(uuid4()),
             step_count=0,
         )
 
-        return self._build_observation(reward=None, done=False, info={"reset": True})
+        info = {"reset": True}
+        if self._cases:
+            info["is_adversarial_case"] = self._cases[0].adversarial
+        return self._build_observation(reward=None, done=False, info=info)
 
     def step(
         self,
@@ -178,16 +192,19 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
         self._budget_used += actual_cost
 
         cost_efficiency = self._score_cost_efficiency(actual_cost, expected_cost)
+        effective_cost_efficiency = cost_efficiency * correctness
         prioritization = self._score_prioritization(case, correctness)
 
         reward = (
             REWARD_WEIGHTS["correctness"] * correctness
-            + REWARD_WEIGHTS["cost_efficiency"] * cost_efficiency
+            + REWARD_WEIGHTS["cost_efficiency"] * effective_cost_efficiency
             + REWARD_WEIGHTS["prioritization"] * prioritization
         )
 
         if self._budget_remaining() < 0 or self._time_remaining() < 0:
             reward -= 0.5
+        if self._tier == "hard" and correctness < 1.0:
+            reward -= 0.1
 
         self._cumulative_score += reward
         self._state.step_count += 1
@@ -198,7 +215,7 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
         info = {
             "reward_breakdown": {
                 "correctness": correctness,
-                "cost_efficiency": cost_efficiency,
+                "cost_efficiency": effective_cost_efficiency,
                 "prioritization": prioritization,
             },
             "correct": correctness >= 0.9,
@@ -210,9 +227,10 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
             "time_remaining": max(self._time_remaining(), 0),
             "cumulative_score": round(self._cumulative_score, 4),
             "invalid_count": self._invalid_count,
+            "is_adversarial_case": case.adversarial,
         }
 
-        if self._debug_mode:
+        if self._debug_mode and self._expose_expected_action:
             info["expected_action"] = self._serialize_action(expected)
 
         if done:
@@ -240,6 +258,8 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
             return_window_open = days_since_order <= 30
             evidence_provided = self._rng.random() < 0.7
 
+            hidden_fields = self._select_hidden_fields(case_type, delivery_status)
+
             cases.append(
                 CaseInternal(
                     case_id=f"case-{idx+1:03d}",
@@ -254,9 +274,95 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
                     return_window_open=return_window_open,
                     evidence_provided=evidence_provided,
                     prior_refund_count=prior_refund_count,
+                    hidden_fields=hidden_fields,
                 )
             )
+        if self._tier == "hard" and self._split == "test":
+            cases = self._inject_adversarial_cases(cases)
         return cases
+
+    def _select_hidden_fields(
+        self, case_type: CaseType, delivery_status: Optional[DeliveryStatus]
+    ) -> Set[str]:
+        if self._tier != "hard":
+            return set()
+        candidates = [
+            "order_value_bucket",
+            "order_age_bucket",
+            "prior_refund_count_bucket",
+        ]
+        if case_type == CaseType.DELIVERY_ISSUE and delivery_status is not None:
+            candidates.append("delivery_status")
+        hidden = set()
+        if candidates:
+            hidden.add(self._rng.choice(candidates))
+        return hidden
+
+    def _inject_adversarial_cases(self, cases: List[CaseInternal]) -> List[CaseInternal]:
+        adversarial = self._adversarial_templates()
+        for idx, template in enumerate(adversarial):
+            if idx >= len(cases):
+                break
+            cases[idx] = template
+        return cases
+
+    def _adversarial_templates(self) -> List[CaseInternal]:
+        templates: List[CaseInternal] = []
+        templates.append(
+            CaseInternal(
+                case_id="adv-001",
+                case_type=CaseType.FRAUD_SIGNAL,
+                customer_tier=CustomerTier.GOLD,
+                order_value_usd=850.0,
+                days_since_order=8,
+                delivery_status=None,
+                issue_severity=IssueSeverity.MEDIUM,
+                fraud_score=0.25,
+                item_category=ItemCategory.ELECTRONICS,
+                return_window_open=True,
+                evidence_provided=False,
+                prior_refund_count=1,
+                hidden_fields={"order_value_bucket"},
+                adversarial=True,
+            )
+        )
+        templates.append(
+            CaseInternal(
+                case_id="adv-002",
+                case_type=CaseType.DELIVERY_ISSUE,
+                customer_tier=CustomerTier.PLATINUM,
+                order_value_usd=420.0,
+                days_since_order=32,
+                delivery_status=DeliveryStatus.DELAYED,
+                issue_severity=IssueSeverity.HIGH,
+                fraud_score=0.15,
+                item_category=ItemCategory.HOME,
+                return_window_open=False,
+                evidence_provided=True,
+                prior_refund_count=0,
+                hidden_fields={"delivery_status"},
+                adversarial=True,
+            )
+        )
+        templates.append(
+            CaseInternal(
+                case_id="adv-003",
+                case_type=CaseType.REFUND_REQUEST,
+                customer_tier=CustomerTier.SILVER,
+                order_value_usd=120.0,
+                days_since_order=29,
+                delivery_status=None,
+                issue_severity=IssueSeverity.LOW,
+                fraud_score=0.78,
+                item_category=ItemCategory.BEAUTY,
+                return_window_open=True,
+                evidence_provided=False,
+                prior_refund_count=3,
+                hidden_fields={"prior_refund_count_bucket"},
+                adversarial=True,
+            )
+        )
+        return templates
 
     def _sample_case_type(self) -> CaseType:
         weights = {
@@ -348,6 +454,29 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
         show_exact = self._tier == "easy"
         show_partial = self._tier == "medium"
 
+        if "order_value_bucket" in case.hidden_fields:
+            order_value_bucket = None
+        if "order_age_bucket" in case.hidden_fields:
+            order_age_bucket = None
+        if "delivery_status" in case.hidden_fields:
+            delivery_status = None
+        else:
+            delivery_status = (
+                case.delivery_status
+                if case.case_type == CaseType.DELIVERY_ISSUE
+                else None
+            )
+        if "return_window_open" in case.hidden_fields:
+            return_window_open = None
+        else:
+            return_window_open = case.return_window_open if show_exact else None
+        if "evidence_provided" in case.hidden_fields:
+            evidence_provided = None
+        else:
+            evidence_provided = case.evidence_provided if (show_exact or show_partial) else None
+        if "prior_refund_count_bucket" in case.hidden_fields:
+            prior_refund_bucket = None
+
         return CaseView(
             case_id=case.case_id,
             case_type=case.case_type,
@@ -359,9 +488,9 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
             order_value_bucket=None if (show_exact or show_partial) else order_value_bucket,
             days_since_order=case.days_since_order if (show_exact or show_partial) else None,
             order_age_bucket=None if (show_exact or show_partial) else order_age_bucket,
-            delivery_status=case.delivery_status if case.case_type == CaseType.DELIVERY_ISSUE else None,
-            return_window_open=case.return_window_open if show_exact else None,
-            evidence_provided=case.evidence_provided if (show_exact or show_partial) else None,
+            delivery_status=delivery_status,
+            return_window_open=return_window_open,
+            evidence_provided=evidence_provided,
             prior_refund_count_bucket=prior_refund_bucket if not show_exact else None,
         )
 
@@ -589,6 +718,8 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
             "budget_used": round(self._budget_used, 2),
             "tier": self._tier,
             "success_rate_by_case_type": success_rate_by_type,
+            "adversarial_case_count": len(self._adversarial_case_ids),
+            "adversarial_case_ids": sorted(self._adversarial_case_ids),
         }
 
     def _serialize_action(self, action: ShopopsAction) -> Dict[str, object]:
