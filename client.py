@@ -12,7 +12,10 @@ from openenv.core import EnvClient
 from openenv.core.client_types import StepResult
 from openenv.core.env_server.types import State
 
-from .models import ShopopsAction, ShopopsObservation
+if __package__:
+    from .models import ShopopsAction, ShopopsObservation
+else:
+    from models import ShopopsAction, ShopopsObservation
 
 
 class ShopopsEnv(
