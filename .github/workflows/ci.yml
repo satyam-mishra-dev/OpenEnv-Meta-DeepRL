@@ -20,8 +20,8 @@ jobs:
           python -m pip install -e ".[dev]"
       - name: Run tests
         run: |
-          python -m pytest shopOps/tests/test_scenarios.py
-          python -m pytest shopOps/tests/test_hard_tier.py
+          python -m pytest tests/test_scenarios.py
+          python -m pytest tests/test_hard_tier.py
       - name: Eval smoke (hard validation)
         run: |
           python -m shopOps.eval --tier hard --validation
