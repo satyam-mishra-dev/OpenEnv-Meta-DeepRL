@@ -152,6 +152,35 @@ export ENV_URL="http://localhost:8000"
 python inference.py
 ```
 
+## Submission Checklist
+
+Run these before submitting:
+
+1. **HF Space ping**  
+   Confirm your Space responds:  
+   `curl -s -o /dev/null -w "%{http_code}" -X POST "$PING_URL/reset"` → `200`
+
+2. **Docker build**  
+   `docker build -t shopops-env:latest -f server/Dockerfile .`
+
+3. **OpenEnv validate**  
+   `openenv validate`
+
+4. **Inference script**  
+   `set -a; source .env; set +a; python inference.py`  
+   Ensure `[START]`, `[STEP]`, `[END]` lines are emitted and the script exits cleanly.
+
+5. **Graded tasks**  
+   Run your 3+ tasks/graders and verify all scores are in `[0.0, 1.0]`.
+
+### Validator Script
+
+If provided by the hackathon, run:
+
+```bash
+./scripts/validate-submission.sh <ping_url> .
+```
+
 ## Test Results
 
 Latest scenario test report:
@@ -160,6 +189,63 @@ Latest scenario test report:
 outputs/test_report.txt
 outputs/test_report_full.txt
 ```
+
+## Baseline Scores
+
+Rule-based baseline policy on test split (total-seeds=200 → 40 test episodes).
+
+| Tier | Model | Avg Final Score |
+| --- | --- | --- |
+| easy | baseline_policy | 15.7861 |
+| medium | baseline_policy | 14.3358 |
+| hard | baseline_policy | 9.0594 |
+
+## Model Benchmarks (Inference Script)
+
+Inference-based benchmarks using `inference.py` against the local server, `MAX_STEPS=20`, 10 seeds.
+
+| Model | Avg Score | Success Rate | Avg Steps | Seeds |
+| --- | --- | --- | --- | --- |
+| gpt-4o | 0.2825 | 100.0% | 20.0 | 10 |
+| gpt-4.1 | 0.2825 | 100.0% | 20.0 | 10 |
+| gpt-4.1-mini | 0.2825 | 100.0% | 20.0 | 10 |
+| gpt-4o-mini | 0.2825 | 100.0% | 20.0 | 10 |
+
+Score is computed as average reward per step (`sum(rewards) / MAX_STEPS`), since the HTTP API does not expose `episode_summary`.
+
+### Reproduce Benchmarks
+
+These steps reproduce all metrics above on any machine with the repo:
+
+1. **Install dependencies**
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r server/requirements.txt
+pip install -e .
+```
+
+2. **Start the environment server**
+```bash
+PORT=8000 python -m shopOps.server.app
+```
+
+3. **Set required env vars**
+```bash
+export API_BASE_URL="https://api.openai.com/v1"
+export HF_TOKEN="<your_api_key>"
+export ENV_URL="http://localhost:8000"
+```
+
+4. **Run the benchmark script**
+```bash
+cd shopOps
+BENCH_MODELS="gpt-4o,gpt-4.1,gpt-4.1-mini,gpt-4o-mini" \\
+BENCH_SEEDS="1,2,3,4,5,6,7,8,9,10" \\
+python scripts/benchmark_models.py
+```
+
+The script prints a markdown table that matches the benchmark table above.
 
 ## Building the Docker Image
 
