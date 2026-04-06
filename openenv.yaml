@@ -1,6 +1,42 @@
 spec_version: 1
 name: shopOps
+description: >
+  E-commerce support operations environment.
+  Each episode is a 20-case workday queue; the agent triages refund requests,
+  delivery issues, wrong-item complaints, and fraud signals while managing
+  a shared time budget (480 min) and spend budget ($2,000).
 type: space
 runtime: fastapi
 app: server.app:app
 port: 8000
+
+tasks:
+  - name: easy
+    description: >
+      Handle 20 e-commerce support cases with full, unobscured information:
+      exact order values, days-since-order, open/closed return window, and
+      evidence flags are all visible. Tests basic policy correctness.
+    difficulty: easy
+    grader: graders.ScoreGrader
+    reset_parameters:
+      tier: easy
+
+  - name: medium
+    description: >
+      Handle 20 cases with partial observability: dollar amounts shown as
+      ranges, some fields hidden, fraud signals increasingly ambiguous.
+      Tests adaptation to uncertainty and graceful degradation.
+    difficulty: medium
+    grader: graders.ScoreGrader
+    reset_parameters:
+      tier: medium
+
+  - name: hard
+    description: >
+      Handle 20 cases with heavily bucketed/hidden fields, adversarial edge
+      cases injected on the test split, and an extra correctness penalty on
+      the hard tier. Tests robustness and frontier-model decision quality.
+    difficulty: hard
+    grader: graders.ScoreGrader
+    reset_parameters:
+      tier: hard

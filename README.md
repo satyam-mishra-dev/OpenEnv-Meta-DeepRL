@@ -1,6 +1,6 @@
 ---
 title: ShopOps Environment Server
-emoji: 🎥
+emoji: 🛒
 colorFrom: indigo
 colorTo: purple
 sdk: docker
@@ -160,8 +160,8 @@ Run these before submitting:
    Confirm your Space responds:  
    `curl -s -o /dev/null -w "%{http_code}" -X POST "$PING_URL/reset"` → `200`
 
-2. **Docker build**  
-   `docker build -t shopops-env:latest -f server/Dockerfile .`
+2. **Docker build**
+   `docker build -t shopops-env:latest .`
 
 3. **OpenEnv validate**  
    `openenv validate`
@@ -202,16 +202,19 @@ Rule-based baseline policy on test split (total-seeds=200 → 40 test episodes).
 
 ## Model Benchmarks (Inference Script)
 
-Inference-based benchmarks using `inference.py` against the local server, `MAX_STEPS=20`, 10 seeds.
+Inference-based benchmarks using `inference.py` against the local server, `MAX_STEPS=20`, `SEED=42`.
+`inference.py` runs all three tiers sequentially and emits one `[START]`/`[STEP]+`/`[END]` block per tier.
 
-| Model | Avg Score | Success Rate | Avg Steps | Seeds |
-| --- | --- | --- | --- | --- |
-| gpt-4o | 0.2825 | 100.0% | 20.0 | 10 |
-| gpt-4.1 | 0.2825 | 100.0% | 20.0 | 10 |
-| gpt-4.1-mini | 0.2825 | 100.0% | 20.0 | 10 |
-| gpt-4o-mini | 0.2825 | 100.0% | 20.0 | 10 |
+Score formula: `max(0, min(1, sum(rewards) / MAX_STEPS))` — normalises cumulative reward
+against the theoretical ceiling of 1.0 per step × 20 steps.
 
-Score is computed as average reward per step (`sum(rewards) / MAX_STEPS`), since the HTTP API does not expose `episode_summary`.
+| Model | Tier | Score |
+| --- | --- | --- |
+| Qwen2.5-72B-Instruct | easy | TBD |
+| Qwen2.5-72B-Instruct | medium | TBD |
+| Qwen2.5-72B-Instruct | hard | TBD |
+
+Re-run benchmarks after setting env vars (see **Reproduce Benchmarks** below).
 
 ### Reproduce Benchmarks
 
@@ -250,6 +253,10 @@ The script prints a markdown table that matches the benchmark table above.
 ## Building the Docker Image
 
 ```bash
+# Standalone build (uses root Dockerfile, no internal base image required)
+docker build -t shopOps-env:latest .
+
+# Or explicitly with the in-repo Dockerfile:
 docker build -t shopOps-env:latest -f server/Dockerfile .
 ```
 
