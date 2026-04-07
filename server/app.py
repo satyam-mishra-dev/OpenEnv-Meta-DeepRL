@@ -35,6 +35,8 @@ except Exception as e:  # pragma: no cover
         "openenv is required for the web interface. Install dependencies with '\n    uv sync\n'"
     ) from e
 
+from fastapi.responses import RedirectResponse
+
 try:
     from ..models import ShopopsAction, ShopopsObservation
     from .shopOps_environment import ShopopsEnvironment
@@ -51,6 +53,11 @@ app = create_app(
     env_name="shopOps",
     max_concurrent_envs=1,  # increase this number to allow more concurrent WebSocket sessions
 )
+
+
+@app.get("/", include_in_schema=False)
+async def root():
+    return RedirectResponse(url="/docs")
 
 
 def main(host: str = "0.0.0.0", port: int = 8000):
