@@ -45,7 +45,7 @@ def test_out_of_stock_validation() -> None:
     assert obs.metadata["last_action_error"] == "replacement_out_of_stock"
 
 
-def test_premature_close_can_reopen_case() -> None:
+def test_premature_close_is_rejected() -> None:
     env = ShopopsEnvironment(debug_mode=True)
     env.reset(seed=1, task="fraud_stockout_cascade")
 
@@ -54,14 +54,12 @@ def test_premature_close_can_reopen_case() -> None:
     env.step(ShopopsAction(action_type=ActionType.INSPECT_POLICY))
     env.step(ShopopsAction(action_type=ActionType.INSPECT_CUSTOMER_HISTORY))
     env.step(ShopopsAction(action_type=ActionType.ISSUE_REFUND, refund_amount_usd=640.0))
-    env.step(ShopopsAction(action_type=ActionType.CLOSE_CASE))
-    env.step(ShopopsAction(action_type=ActionType.SWITCH_CASE, case_id="HARD-1"))
-    env.step(ShopopsAction(action_type=ActionType.INSPECT_ORDER))
+    obs = env.step(ShopopsAction(action_type=ActionType.CLOSE_CASE))
 
     reopened = env._case_by_id("HARD-2")
     assert reopened is not None
-    assert reopened.status.value == "reopened"
-    assert env._fraud_loss_usd > 0.0
+    assert reopened.status.value == "resolved"
+    assert obs.metadata["last_action_error"] == "cannot_close_with_blockers"
 
 
 def test_escalation_requires_reason() -> None:

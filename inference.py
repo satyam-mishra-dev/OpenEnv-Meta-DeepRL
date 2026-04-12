@@ -35,7 +35,7 @@ MAX_STEPS_BY_TASK = {
     "fraud_stockout_cascade": 40,
 }
 MAX_TOTAL_REWARD = {
-    "refund_policy_recovery": 1.7,
+    "refund_policy_recovery": 2.0,
     "sla_queue_juggle": 5.4,
     "fraud_stockout_cascade": 7.6,
 }
@@ -152,19 +152,26 @@ def _safe_action(observation: Dict[str, Any]) -> Dict[str, Any]:
     else:
         action_type = "issue_refund"
 
+    def has_text(summary: Optional[str], needle: str) -> bool:
+        return needle.lower() in (summary or "").lower()
+
     refund_amount = None
     if action_type == "issue_refund":
         order_value = float(active_case.get("order_value_usd") or 0.0)
-        if active_case.get("case_id") == "RPR-1":
-            refund_amount = 92.0
-        elif active_case.get("case_id") == "SLA-5":
-            refund_amount = 50.0
-        elif active_case.get("case_id") == "HARD-4":
-            refund_amount = 72.0
-        elif active_case.get("case_id") == "HARD-3":
-            refund_amount = 145.0
+        policy_summary = active_case.get("policy_summary")
+        history_summary = active_case.get("history_summary")
+        if has_text(policy_summary, "35%"):
+            refund_amount = round(order_value * 0.33, 2)
+        elif active_case.get("carrier_status") == "approved":
+            refund_amount = round(order_value * 0.29, 2)
+        elif has_text(history_summary, "prior replacements"):
+            refund_amount = round(order_value * 0.35, 2)
         else:
             refund_amount = active_case.get("requested_compensation_usd") or order_value
+
+    if action_type == "ship_replacement" and has_text(active_case.get("history_summary"), "prior replacements"):
+        action_type = "issue_refund"
+        refund_amount = round(float(active_case.get("order_value_usd") or 0.0) * 0.35, 2)
 
     return {
         "action_type": action_type,

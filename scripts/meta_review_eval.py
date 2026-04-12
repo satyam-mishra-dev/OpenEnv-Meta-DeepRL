@@ -18,7 +18,7 @@ from shopOps.server.shopOps_environment import ShopopsEnvironment
 
 OUTPUT_PATH = Path("outputs/evals/meta_review_eval.json")
 NORMALIZATION_CAPS = {
-    "refund_policy_recovery": 1.7,
+    "refund_policy_recovery": 2.0,
     "sla_queue_juggle": 5.4,
     "fraud_stockout_cascade": 7.6,
 }

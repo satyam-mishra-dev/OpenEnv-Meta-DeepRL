@@ -557,6 +557,24 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
             cases = [cases[0], *tail]
             return cases
 
+        console_value = round(760.0 + self._rng.uniform(-35.0, 35.0), 2)
+        suspicious_refund_value = round(620.0 + self._rng.uniform(-55.0, 45.0), 2)
+        suspicious_partial_refund = round((390.0 + self._rng.uniform(-20.0, 35.0)) * 0.35, 2)
+        delayed_credit_value = round(240.0 + self._rng.uniform(-18.0, 22.0), 2)
+        delayed_credit_target = round(delayed_credit_value * self._rng.uniform(0.26, 0.34), 2)
+        small_refund_value = round(72.0 + self._rng.uniform(-6.0, 12.0), 2)
+        earbuds_value = round(155.0 + self._rng.uniform(-12.0, 18.0), 2)
+        self._scenario = ScenarioConfig(
+            task_name=self._scenario.task_name,
+            difficulty=self._scenario.difficulty,
+            time_limit_minutes=self._scenario.time_limit_minutes,
+            budget_limit_usd=self._scenario.budget_limit_usd,
+            step_limit=self._scenario.step_limit,
+            inventory={
+                "console-pro": 1,
+                "earbuds-lite": 1 + self._rng.randint(0, 1),
+            },
+        )
         cases = [
             CaseInternal(
                 case_id="HARD-1",
@@ -564,8 +582,8 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
                 case_type=CaseType.WRONG_ITEM,
                 customer_tier=CustomerTier.PLATINUM,
                 priority=CasePriority.CRITICAL,
-                order_value_usd=780.0,
-                days_since_order=6,
+                order_value_usd=console_value,
+                days_since_order=5 + self._rng.randint(0, 2),
                 order_status=OrderStatus.DELIVERED,
                 fraud_signal=FraudSignal.LOW,
                 replacement_sku="console-pro",
@@ -577,7 +595,7 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
                 order_details_text="Premium customer received the wrong console bundle; photo proof attached.",
                 history_details_text="Customer history is clean and support promised priority make-good.",
                 inventory_summary="console-pro inventory has exactly 1 unit available.",
-                sla_minutes=55,
+                sla_minutes=48 + self._rng.randint(0, 12),
                 customer_satisfaction_bonus=0.15,
             ),
             CaseInternal(
@@ -586,11 +604,11 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
                 case_type=CaseType.REFUND_REQUEST,
                 customer_tier=CustomerTier.GOLD,
                 priority=CasePriority.HIGH,
-                order_value_usd=640.0,
-                days_since_order=3,
+                order_value_usd=suspicious_refund_value,
+                days_since_order=2 + self._rng.randint(0, 2),
                 order_status=OrderStatus.DELIVERED,
                 fraud_signal=FraudSignal.HIGH,
-                requested_compensation_usd=640.0,
+                requested_compensation_usd=suspicious_refund_value,
                 required_checks={"order", "policy", "history"},
                 needs_evidence=True,
                 preferred_resolution=ActionType.ESCALATE_RISK,
@@ -600,8 +618,8 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
                 history_details_text="Account shows repeated refund disputes and mismatched IP regions.",
                 evidence_response_text="Customer uploaded edited screenshots that do not verify non-delivery.",
                 evidence_outcome=EvidenceStatus.INSUFFICIENT,
-                sla_minutes=90,
-                fraud_loss_if_bad_close_usd=350.0,
+                sla_minutes=82 + self._rng.randint(0, 16),
+                fraud_loss_if_bad_close_usd=320.0 + self._rng.uniform(0.0, 70.0),
                 can_reopen=True,
                 customer_satisfaction_bonus=0.04,
             ),
@@ -611,17 +629,17 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
                 case_type=CaseType.WRONG_ITEM,
                 customer_tier=CustomerTier.BRONZE,
                 priority=CasePriority.MEDIUM,
-                order_value_usd=410.0,
-                days_since_order=10,
+                order_value_usd=round(suspicious_partial_refund / 0.35, 2),
+                days_since_order=9 + self._rng.randint(0, 3),
                 order_status=OrderStatus.DELIVERED,
-                fraud_signal=FraudSignal.MEDIUM,
+                fraud_signal=FraudSignal.MEDIUM if self._rng.random() < 0.7 else FraudSignal.HIGH,
                 replacement_sku="console-pro",
                 required_checks={"order", "history"},
                 preferred_resolution=ActionType.ISSUE_REFUND,
-                refund_range=(120.0, 170.0),
+                refund_range=(max(90.0, suspicious_partial_refund - 18.0), suspicious_partial_refund + 18.0),
                 order_details_text="Customer claims accessories are missing, but no photo evidence is attached.",
                 history_details_text="Three prior replacements were granted on the same account this quarter.",
-                sla_minutes=130,
+                sla_minutes=118 + self._rng.randint(0, 20),
                 customer_satisfaction_bonus=0.05,
             ),
             CaseInternal(
@@ -630,19 +648,19 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
                 case_type=CaseType.DELIVERY_ISSUE,
                 customer_tier=CustomerTier.SILVER,
                 priority=CasePriority.MEDIUM,
-                order_value_usd=245.0,
-                days_since_order=7,
+                order_value_usd=delayed_credit_value,
+                days_since_order=6 + self._rng.randint(0, 3),
                 order_status=OrderStatus.DELAYED,
                 fraud_signal=FraudSignal.LOW,
                 required_checks={"order", "policy"},
                 needs_carrier_contact=True,
                 preferred_resolution=ActionType.ISSUE_REFUND,
-                refund_range=(60.0, 85.0),
+                refund_range=(max(35.0, delayed_credit_target - 12.0), delayed_credit_target + 12.0),
                 order_details_text="Carrier missed two scans and the customer is asking for a service credit.",
                 policy_details_text="Carrier must acknowledge service failure before compensation is issued.",
                 carrier_response_text="Carrier accepted liability and approved a partial service refund.",
                 carrier_outcome=CarrierStatus.APPROVED,
-                sla_minutes=150,
+                sla_minutes=138 + self._rng.randint(0, 20),
                 customer_satisfaction_bonus=0.07,
             ),
             CaseInternal(
@@ -660,7 +678,7 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
                 preferred_escalation_reason=EscalationReason.SUSPECTED_FRAUD,
                 order_details_text="Geo-velocity and BIN mismatch triggered the fraud queue.",
                 history_details_text="This is the first order on the account, but the card has multiple linked declines.",
-                sla_minutes=105,
+                sla_minutes=96 + self._rng.randint(0, 18),
                 customer_satisfaction_bonus=0.03,
             ),
             CaseInternal(
@@ -669,16 +687,16 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
                 case_type=CaseType.REFUND_REQUEST,
                 customer_tier=CustomerTier.SILVER,
                 priority=CasePriority.LOW,
-                order_value_usd=78.0,
-                days_since_order=13,
+                order_value_usd=small_refund_value,
+                days_since_order=11 + self._rng.randint(0, 4),
                 order_status=OrderStatus.DELIVERED,
                 fraud_signal=FraudSignal.LOW,
-                requested_compensation_usd=78.0,
+                requested_compensation_usd=small_refund_value,
                 required_checks={"order"},
                 preferred_resolution=ActionType.ISSUE_REFUND,
-                refund_range=(76.0, 80.0),
+                refund_range=(max(20.0, small_refund_value - 2.0), small_refund_value + 2.0),
                 order_details_text="Straightforward return request within the return window.",
-                sla_minutes=200,
+                sla_minutes=188 + self._rng.randint(0, 18),
                 customer_satisfaction_bonus=0.05,
             ),
             CaseInternal(
@@ -687,8 +705,8 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
                 case_type=CaseType.DELIVERY_ISSUE,
                 customer_tier=CustomerTier.GOLD,
                 priority=CasePriority.HIGH,
-                order_value_usd=165.0,
-                days_since_order=9,
+                order_value_usd=earbuds_value,
+                days_since_order=8 + self._rng.randint(0, 3),
                 order_status=OrderStatus.LOST,
                 fraud_signal=FraudSignal.LOW,
                 replacement_sku="earbuds-lite",
@@ -696,12 +714,14 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
                 preferred_resolution=ActionType.SHIP_REPLACEMENT,
                 preferred_expedite=False,
                 order_details_text="Carrier marked the parcel lost in transit after depot transfer.",
-                inventory_summary="earbuds-lite inventory has 1 unit available.",
-                sla_minutes=95,
+                inventory_summary="earbuds-lite inventory is scarce and may not support repeated replacements.",
+                sla_minutes=88 + self._rng.randint(0, 16),
                 customer_satisfaction_bonus=0.08,
             ),
         ]
-        return cases
+        tail = cases[1:]
+        self._rng.shuffle(tail)
+        return [cases[0], *tail]
 
     def _validate_action(self, action: ShopopsAction) -> Optional[str]:
         if action.action_type == ActionType.SWITCH_CASE:
@@ -740,6 +760,8 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
         case = self._active_case()
         if case.status == CaseStatus.CLOSED and action.action_type != ActionType.SWITCH_CASE:
             return "case_closed"
+        if action.action_type == ActionType.CLOSE_CASE and self._blockers_for_case(case):
+            return "cannot_close_with_blockers"
         if action.action_type == ActionType.SHIP_REPLACEMENT:
             if not case.replacement_sku:
                 return "no_replacement_sku"
@@ -1031,21 +1053,8 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
         blockers = self._blockers_for_case(case)
         quality = self._resolution_quality(case)
         reward = 0.12 + 0.22 * quality
-        if blockers:
-            reward -= 0.2
         case.closed_at_step = self._state.step_count + 1
         case.status = CaseStatus.CLOSED
-        if blockers and case.can_reopen:
-            case.pending_events.append("reopen_case")
-            self._pending_events.append(
-                PendingEvent(
-                    case_id=case.case_id,
-                    event_type="reopen_case",
-                    ready_step=self._state.step_count + 2,
-                    summary="Case reopened because closure happened before key evidence landed.",
-                    outcome="reopened",
-                )
-            )
         if case.fraud_loss_if_bad_close_usd > 0 and quality < 0.3:
             self._fraud_loss_usd += case.fraud_loss_if_bad_close_usd
             reward -= 0.1
@@ -1147,28 +1156,39 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
         return float(summary["terminal_bonus"])
 
     def _episode_summary(self) -> Dict[str, object]:
+        termination_reason = self._termination_reason()
         closed_cases = sum(1 for case in self._cases if case.status == CaseStatus.CLOSED)
         resolved_cases = sum(1 for case in self._cases if case.resolution_action is not None)
         quality_scores = [self._resolution_quality(case) for case in self._cases]
         policy_score = max(0.0, min(1.0, sum(max(score, 0.0) for score in quality_scores) / max(len(self._cases), 1)))
         closure_score = closed_cases / max(len(self._cases), 1)
+        resolved_score = resolved_cases / max(len(self._cases), 1)
         sla_score = max(0.0, 1.0 - (self._sla_breaches / max(len(self._cases), 1)))
         stock_score = max(0.0, 1.0 - (self._stockouts / max(len(self._cases), 1)))
         fraud_score = max(0.0, 1.0 - (self._fraud_loss_usd / max(self._scenario.budget_limit_usd, 1.0)))
         customer_score = max(0.0, min(1.0, self._customer_satisfaction))
+        invalid_penalty = min(1.0, self._invalid_count / INVALID_LIMIT)
+        unresolved_ratio = 1.0 - closure_score
         business_score = (
-            0.25 * policy_score
-            + 0.2 * closure_score
+            0.35 * policy_score
+            + 0.15 * resolved_score
+            + 0.05 * closure_score
             + 0.15 * sla_score
             + 0.15 * stock_score
             + 0.15 * fraud_score
-            + 0.1 * customer_score
+            + 0.05 * customer_score
         )
+        if termination_reason == "invalid_action_limit":
+            business_score -= 0.35
+        elif termination_reason == "step_limit":
+            business_score -= 0.2 + 0.2 * unresolved_ratio
+        business_score -= 0.35 * invalid_penalty
+        business_score -= 0.25 * unresolved_ratio
         terminal_bonus = max(0.0, min(0.5, business_score * 0.5))
         return {
             "task": self._task_name,
             "difficulty": self._difficulty,
-            "final_score": round(business_score, 4),
+            "final_score": round(max(0.0, min(1.0, business_score)), 4),
             "terminal_bonus": round(terminal_bonus, 4),
             "closed_cases": closed_cases,
             "resolved_cases": resolved_cases,
@@ -1180,6 +1200,7 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
             "invalid_actions": self._invalid_count,
             "time_used_minutes": self._time_used,
             "budget_used_usd": round(self._budget_used, 2),
+            "termination_reason": termination_reason,
         }
 
     def _resolution_quality(self, case: CaseInternal) -> float:

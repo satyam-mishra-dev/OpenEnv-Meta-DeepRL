@@ -26,6 +26,11 @@ TASKS = [
     "sla_queue_juggle",
     "fraud_stockout_cascade",
 ]
+TIER_TO_TASK = {
+    "easy": "refund_policy_recovery",
+    "medium": "sla_queue_juggle",
+    "hard": "fraud_stockout_cascade",
+}
 
 
 def _priority_rank(priority: CasePriority) -> int:
@@ -51,6 +56,39 @@ def _next_open_case(obs: ShopopsObservation) -> str | None:
     return candidates[0].case_id
 
 
+def _has_text(summary: str | None, needle: str) -> bool:
+    return needle.lower() in (summary or "").lower()
+
+
+def _refund_target(case) -> float:
+    order_value = float(case.order_value_usd or 0.0)
+    requested = float(case.requested_compensation_usd or order_value)
+    policy = case.policy_summary or ""
+    history = case.history_summary or ""
+
+    if "35%" in policy:
+        return round(order_value * 0.33, 2)
+    if case.case_type == CaseType.DELIVERY_ISSUE and case.carrier_status == CarrierStatus.APPROVED:
+        return round(order_value * 0.29, 2)
+    if _has_text(history, "prior replacements"):
+        return round(order_value * 0.35, 2)
+    return round(requested, 2)
+
+
+def _should_replace(case) -> bool:
+    history = case.history_summary or ""
+    order_status = getattr(case.order_status, "value", case.order_status)
+    if case.case_type == CaseType.DELIVERY_ISSUE and order_status == "lost":
+        return True
+    if case.case_type == CaseType.WRONG_ITEM:
+        if case.fraud_signal == FraudSignal.HIGH:
+            return False
+        if _has_text(history, "prior replacements"):
+            return False
+        return bool(case.replacement_sku)
+    return False
+
+
 def baseline_policy(obs: ShopopsObservation) -> ShopopsAction:
     case = obs.active_case
     blockers = set(obs.unresolved_blockers)
@@ -67,10 +105,6 @@ def baseline_policy(obs: ShopopsObservation) -> ShopopsAction:
             return ShopopsAction(action_type=ActionType.SWITCH_CASE, case_id=target)
         return ShopopsAction(action_type=ActionType.CLOSE_CASE)
 
-    waiting_external = {
-        EvidenceStatus.REQUESTED,
-        CarrierStatus.INVESTIGATING,
-    }
     if case.evidence_status == EvidenceStatus.REQUESTED or case.carrier_status == CarrierStatus.INVESTIGATING:
         target = _next_open_case(obs)
         if target and target != case.case_id:
@@ -105,20 +139,14 @@ def baseline_policy(obs: ShopopsObservation) -> ShopopsAction:
                 action_type=ActionType.ESCALATE_RISK,
                 escalation_reason=EscalationReason.SUSPECTED_FRAUD,
             )
-        if case.case_id == "RPR-1":
-            return ShopopsAction(action_type=ActionType.ISSUE_REFUND, refund_amount_usd=92.0)
-        if case.case_id == "SLA-5":
-            return ShopopsAction(action_type=ActionType.ISSUE_REFUND, refund_amount_usd=50.0)
-        if case.case_id == "HARD-4":
-            return ShopopsAction(action_type=ActionType.ISSUE_REFUND, refund_amount_usd=72.0)
-        if case.case_id == "HARD-3":
-            return ShopopsAction(action_type=ActionType.ISSUE_REFUND, refund_amount_usd=145.0)
-        if case.case_type == CaseType.REFUND_REQUEST:
-            requested = case.requested_compensation_usd or case.order_value_usd
-            return ShopopsAction(action_type=ActionType.ISSUE_REFUND, refund_amount_usd=requested)
-        if case.case_type in {CaseType.WRONG_ITEM, CaseType.DELIVERY_ISSUE} and case.replacement_sku:
+        if _should_replace(case):
             expedite = case.priority in {CasePriority.HIGH, CasePriority.CRITICAL}
             return ShopopsAction(action_type=ActionType.SHIP_REPLACEMENT, expedite=expedite)
+        if case.case_type in {CaseType.REFUND_REQUEST, CaseType.WRONG_ITEM, CaseType.DELIVERY_ISSUE}:
+            return ShopopsAction(
+                action_type=ActionType.ISSUE_REFUND,
+                refund_amount_usd=_refund_target(case),
+            )
 
     if "internal_note_required" in blockers and case.resolution_action is not None:
         return ShopopsAction(action_type=ActionType.ADD_INTERNAL_NOTE, note_code="ops_reviewed")
@@ -187,7 +215,7 @@ def aggregate_results(results: List[Dict[str, object]]) -> Dict[str, object]:
     }
 
 
-def run_eval(task: str, total_seeds: int, split_seed: int) -> Dict[str, object]:
+def run_eval(task: str, total_seeds: int, split_seed: int, validation: bool = False) -> Dict[str, object]:
     rng = random.Random(split_seed)
     seeds = list(range(1, total_seeds + 1))
     rng.shuffle(seeds)
@@ -195,6 +223,7 @@ def run_eval(task: str, total_seeds: int, split_seed: int) -> Dict[str, object]:
     return {
         "task": task,
         "seed_count": len(seeds),
+        "validation": validation,
         "results": results,
         "summary": aggregate_results(results),
     }
@@ -203,16 +232,36 @@ def run_eval(task: str, total_seeds: int, split_seed: int) -> Dict[str, object]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run ShopOps baseline evaluation")
     parser.add_argument("--task", choices=TASKS + ["all"], default="all")
+    parser.add_argument(
+        "--tier",
+        choices=list(TIER_TO_TASK.keys()),
+        help="Backward-compatible alias for --task",
+    )
+    parser.add_argument(
+        "--validation",
+        action="store_true",
+        help="Backward-compatible flag retained for CI compatibility",
+    )
     parser.add_argument("--total-seeds", type=int, default=10)
     parser.add_argument("--seed", type=int, default=1337)
     args = parser.parse_args()
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    tasks = TASKS if args.task == "all" else [args.task]
+    selected_task = TIER_TO_TASK.get(args.tier) if args.tier else args.task
+    tasks = TASKS if selected_task == "all" else [selected_task]
     payload = {}
     for task in tasks:
-        payload[task] = run_eval(task=task, total_seeds=args.total_seeds, split_seed=args.seed)
-    out_path = OUTPUT_DIR / "shopops_eval_tasks.json"
+        payload[task] = run_eval(
+            task=task,
+            total_seeds=args.total_seeds,
+            split_seed=args.seed,
+            validation=args.validation,
+        )
+    if args.tier:
+        suffix = "validation" if args.validation else "legacy"
+        out_path = OUTPUT_DIR / f"shopops_eval_{suffix}_{args.tier}.json"
+    else:
+        out_path = OUTPUT_DIR / "shopops_eval_tasks.json"
     out_path.write_text(json.dumps(payload, indent=2))
     print(f"Wrote {out_path}")
 

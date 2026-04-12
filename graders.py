@@ -13,7 +13,7 @@ def _grade_with_cap(trajectory: List[Dict[str, Any]], max_total_reward: float) -
 
 class RefundPolicyRecoveryGrader:
     def grade(self, trajectory: List[Dict[str, Any]]) -> float:
-        return _grade_with_cap(trajectory, max_total_reward=1.7)
+        return _grade_with_cap(trajectory, max_total_reward=2.0)
 
 
 class SlaQueueJuggleGrader:
