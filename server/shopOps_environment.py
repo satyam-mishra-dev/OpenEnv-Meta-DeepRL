@@ -53,6 +53,8 @@ except ImportError:
 
 ENV_SCHEMA_VERSION = "2.0.0"
 INVALID_LIMIT = 4
+SCORE_MIN = 1e-9
+SCORE_MAX = 1.0 - 1e-9
 TASK_ALIASES = {
     "easy": "refund_policy_recovery",
     "medium": "sla_queue_juggle",
@@ -1185,10 +1187,11 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
         business_score -= 0.35 * invalid_penalty
         business_score -= 0.25 * unresolved_ratio
         terminal_bonus = max(0.0, min(0.5, business_score * 0.5))
+        final_score = max(SCORE_MIN, min(SCORE_MAX, business_score))
         return {
             "task": self._task_name,
             "difficulty": self._difficulty,
-            "final_score": round(max(0.0, min(1.0, business_score)), 4),
+            "final_score": final_score,
             "terminal_bonus": round(terminal_bonus, 4),
             "closed_cases": closed_cases,
             "resolved_cases": resolved_cases,

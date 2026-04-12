@@ -15,6 +15,7 @@ def test_episode_summary_schema() -> None:
     assert "closed_cases" in summary
     assert "reopened_cases" in summary
     assert "fraud_loss_usd" in summary
+    assert 0.0 < summary["final_score"] < 1.0
 
 
 def test_eval_aggregate_metrics() -> None:
@@ -34,6 +35,7 @@ def test_baseline_scores_are_monotonic_by_difficulty_seed_1() -> None:
         for task in TASKS
     ]
     assert scores[0] >= scores[1] >= scores[2]
+    assert all(0.0 < score < 1.0 for score in scores)
 
 
 def test_graders_return_open_interval_scores() -> None:
