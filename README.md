@@ -2,7 +2,7 @@
 title: ShopOps Environment Server
 emoji: 🛒
 colorFrom: indigo
-colorTo: purple
+colorTo: blue
 sdk: docker
 pinned: false
 app_port: 8000
@@ -10,216 +10,179 @@ tags:
   - openenv
 ---
 
-# ShopOps Environment
+# ShopOps 2.0
 
-ShopOps is a realistic OpenEnv environment that simulates daily operations of an
-E‑commerce support and operations team. Each episode represents a 20‑case workday
-where an agent must choose actions (refund, replace, escalate, reject), manage
-limited resources (time + budget), and prioritize urgent or high‑value cases.
+ShopOps is an OpenEnv environment for **real customer-operations work**. The agent is not picking a final label from a tiny action set anymore. It has to operate a support queue, inspect policies and customer history, manage scarce replacement inventory, wait for delayed carrier or evidence responses, and close cases without creating downstream damage.
 
-## Quick Start
-
-```python
-from shopOps import ShopopsAction, ShopopsEnv, ActionType, EscalationReason
-
-try:
-    env = ShopopsEnv.from_docker_image("shopOps-env:latest")
-    result = env.reset(seed=42, tier="medium")
-
-    # Take a step
-    action = ShopopsAction(
-        action_type=ActionType.REFUND,
-        refund_amount_usd=50.0,
-    )
-    result = env.step(action)
-    print(result.observation.case.case_type)
-    print(result.observation.metadata["reward_breakdown"])
-
-finally:
-    env.close()
-```
+This is designed to evaluate long-horizon business operations behavior:
+- tool use instead of single-shot classification
+- coupled state across multiple cases
+- delayed consequences from premature closure
+- real tradeoffs between SLA, budget, fraud loss, and stock availability
 
 ## Environment Overview
 
-### Episode
-- Fixed length: **20 cases** per episode
-- Done conditions:
-  - All 20 cases processed
-  - Time or budget exhausted
-  - 3 invalid actions
+Each episode is a deterministic task scenario exposed through the standard OpenEnv API:
+- `reset()` returns the first observation for the selected task
+- `step(action)` applies one tool/action and returns observation, reward, done, and info
+- `state` returns the current `episode_id` and `step_count`
 
-### Resources
-- Time limit: **480 minutes**
-- Budget limit: **$2,000**
-
-### Difficulty Tiers
-- `easy`: full detail
-- `medium`: partial detail
-- `hard`: bucketed values, hidden fields, and adversarial cases (test split only)
+The environment is implemented with typed Pydantic models and ships with:
+- `openenv.yaml`
+- deterministic graders for all tasks
+- `inference.py` in the repo root
+- a Dockerfile for local and Hugging Face Space deployment
 
 ## Action Space
 
-**ShopopsAction** fields:
-- `action_type`: `refund | replace | escalate | reject`
-- `refund_amount_usd` (refund only)
-- `replacement_expedite` (replace only)
-- `escalation_reason` (escalate only)
+`ShopopsAction` is a typed tool invocation with these fields:
+- `action_type`
+- `case_id`
+- `refund_amount_usd`
+- `expedite`
+- `escalation_reason`
+- `note_code`
 
-Invalid actions are rejected and count toward the **3‑strike limit**.
+Supported `action_type` values:
+- `inspect_order`
+- `inspect_policy`
+- `inspect_inventory`
+- `inspect_customer_history`
+- `request_evidence`
+- `contact_carrier`
+- `issue_refund`
+- `ship_replacement`
+- `escalate_risk`
+- `add_internal_note`
+- `close_case`
+- `switch_case`
 
-### Action Costs (Explicit)
+Key constraints:
+- `issue_refund` requires `refund_amount_usd`
+- `ship_replacement` may set `expedite`
+- `escalate_risk` requires `escalation_reason`
+- `add_internal_note` requires `note_code`
+- non-switch actions must target the active case
 
-```
-ACTION_COSTS = {
-  refund:  time=2,  cost=refund_amount
-  replace: time=5,  cost=min(order_value*0.6, 300) (+2 min, +$20 if expedited)
-  escalate: time=10, cost=0
-  reject:  time=1,  cost=0
-}
-```
+## Observation Space
 
-## Observations
+Each `ShopopsObservation` contains:
+- `active_case`: full working view of the active case
+- `queue`: visible queue summary for all cases
+- `latest_tool_result`: persistent result from the last action
+- `resources`: time, budget, and inventory state
+- `metrics`: resolved cases, reopened cases, SLA breaches, fraud loss, satisfaction, stockouts
+- `unresolved_blockers`: blockers still preventing safe closure
+- `current_task`, `difficulty`, `step_index`, `episode_id`, `env_schema_version`
 
-Each observation includes:
-- `case`: structured case data (partially observable by tier)
-- `resources`: time/budget remaining
-- `case_index`, `step_index`, `episode_id`, `tier`
-- `metadata`: per‑step info and reward breakdown
+The active case includes persistent tool-discovered summaries:
+- `order_summary`
+- `policy_summary`
+- `history_summary`
+- `inventory_summary`
 
-### Partial Observability Example
-Instead of `fraud_score`, the agent receives:
-- `fraud_signal`: `low | medium | high`
+This lets an agent build working memory from prior inspection actions instead of re-querying everything every step.
 
-## Rewards
+## Tasks
 
-Dense reward per step:
-```
-reward = 0.6 * correctness
-       + 0.25 * (cost_efficiency * correctness)
-       + 0.15 * prioritization
-```
+### 1. `refund_policy_recovery` — easy
+Single-case recovery task.
 
-Reward breakdown is returned in `observation.metadata["reward_breakdown"]`.
-Per-step rewards are normalized to roughly `[-1, 1]` (invalid actions yield `-1`).
+The agent must:
+- inspect order facts
+- inspect policy
+- choose a compliant partial refund
+- add the required internal note
+- close the case cleanly
 
-## Info & Debugging
+### 2. `sla_queue_juggle` — medium
+Five-case queue with mixed urgency.
 
-The environment returns rich per‑step info via `observation.metadata`:
-- reward breakdown
-- correctness flag
-- budget/time used
-- cumulative score
-- invalid action count
+The agent must:
+- switch cases intentionally
+- prioritize SLA-critical work
+- inspect inventory and history where needed
+- avoid wasting budget
+- close all five cases
 
-**Expected action is NOT exposed** unless `debug_mode=True` or in offline eval.
+### 3. `fraud_stockout_cascade` — hard
+Seven-case scenario with coupled consequences.
 
-## Evaluation + Metrics
+The agent must:
+- preserve scarce inventory for the right case
+- avoid refunding suspicious orders before evidence arrives
+- handle fraud escalation correctly
+- juggle delayed carrier/evidence events
+- prevent reopen cascades and fraud loss
 
-A baseline evaluation runner is provided:
+## Reward Design
+
+Reward is dense over the trajectory and combines:
+- information gain from useful inspections
+- workflow progress from moving a case forward correctly
+- business outcome from the quality of the chosen resolution
+
+Undesirable behavior is penalized:
+- invalid tool calls
+- duplicate inspections
+- unnecessary external requests
+- refunds without required review
+- premature closure that causes reopen or fraud loss
+
+The terminal episode summary tracks:
+- `final_score`
+- `closed_cases`
+- `reopened_cases`
+- `sla_breaches`
+- `fraud_loss_usd`
+- `stockouts`
+- `customer_satisfaction`
+
+## Baseline
+
+`shopOps.eval` contains a deterministic rule baseline that uses the same public observation space as an agent.
+
+10-seed baseline results:
+
+| Task | Avg final score | Avg total reward |
+| --- | ---: | ---: |
+| `refund_policy_recovery` | `0.9840` | `1.5920` |
+| `sla_queue_juggle` | `0.9360` | `5.0384` |
+| `fraud_stockout_cascade` | `0.9246` | `7.1421` |
+
+Reproduce:
 
 ```bash
-python -m shopOps.eval --split test --tier medium --total-seeds 200
+./venv/bin/python -m shopOps.eval --task all --total-seeds 10
 ```
 
-Outputs JSON metrics to `outputs/evals/` with:
-- final score
-- per‑tier score
-- success rate per case type
+## Inference Script
 
-### Train/Test Split
-- Deterministic split (80/20)
-- Controlled via `--seed` in the eval runner
-- Hard-tier validation seeds available via `--validation`
-
-## Inference Script (Hackathon Compliance)
-
-The repo includes `inference.py` at the project root. It uses the OpenAI client
-and emits strict `[START]`, `[STEP]`, `[END]` logs.
+The required root-level `inference.py` uses the OpenAI client and emits strict:
+- `[START]`
+- `[STEP]`
+- `[END]`
 
 Required environment variables:
 - `API_BASE_URL`
 - `MODEL_NAME`
 - `HF_TOKEN`
-- `ENV_URL` (optional, defaults to `http://localhost:8000`)
+
+Optional:
+- `ENV_URL` default `http://localhost:8000`
 
 Example:
+
 ```bash
-export API_BASE_URL="https://api.openai.com/v1"
-export MODEL_NAME="gpt-4o"
-export HF_TOKEN="<your_key>"
+export API_BASE_URL="https://router.huggingface.co/v1"
+export MODEL_NAME="Qwen/Qwen2.5-72B-Instruct"
+export HF_TOKEN="<your_token>"
 export ENV_URL="http://localhost:8000"
 python inference.py
 ```
 
-## Submission Checklist
+## Local Setup
 
-Run these before submitting:
-
-1. **HF Space ping**  
-   Confirm your Space responds:  
-   `curl -s -o /dev/null -w "%{http_code}" -X POST "$PING_URL/reset"` → `200`
-
-2. **Docker build**
-   `docker build -t shopops-env:latest .`
-
-3. **OpenEnv validate**  
-   `openenv validate`
-
-4. **Inference script**  
-   `set -a; source .env; set +a; python inference.py`  
-   Ensure `[START]`, `[STEP]`, `[END]` lines are emitted and the script exits cleanly.
-
-5. **Graded tasks**  
-   Run your 3+ tasks/graders and verify all scores are in `[0.0, 1.0]`.
-
-### Validator Script
-
-If provided by the hackathon, run:
-
-```bash
-./scripts/validate-submission.sh <ping_url> .
-```
-
-## Test Results
-
-Latest scenario test report:
-
-```
-outputs/test_report.txt
-outputs/test_report_full.txt
-```
-
-## Baseline Scores
-
-Rule-based baseline policy on test split (total-seeds=200 → 40 test episodes).
-
-| Tier | Model | Avg Final Score |
-| --- | --- | --- |
-| easy | baseline_policy | 15.7861 |
-| medium | baseline_policy | 14.3358 |
-| hard | baseline_policy | 9.0594 |
-
-## Model Benchmarks (Inference Script)
-
-Inference-based benchmarks using `inference.py` against the local server, `MAX_STEPS=20`, `SEED=42`.
-`inference.py` runs all three tiers sequentially and emits one `[START]`/`[STEP]+`/`[END]` block per tier.
-
-Score formula: `max(0, min(1, sum(rewards) / MAX_STEPS))` — normalises cumulative reward
-against the theoretical ceiling of 1.0 per step × 20 steps.
-
-| Model | Tier | Score |
-| --- | --- | --- |
-| Qwen2.5-72B-Instruct | easy | TBD |
-| Qwen2.5-72B-Instruct | medium | TBD |
-| Qwen2.5-72B-Instruct | hard | TBD |
-
-Re-run benchmarks after setting env vars (see **Reproduce Benchmarks** below).
-
-### Reproduce Benchmarks
-
-These steps reproduce all metrics above on any machine with the repo:
-
-1. **Install dependencies**
 ```bash
 python3 -m venv venv
 source venv/bin/activate
@@ -227,66 +190,44 @@ pip install -r server/requirements.txt
 pip install -e .
 ```
 
-2. **Start the environment server**
-```bash
-PORT=8000 python -m shopOps.server.app
-```
-
-3. **Set required env vars**
-```bash
-export API_BASE_URL="https://api.openai.com/v1"
-export HF_TOKEN="<your_api_key>"
-export ENV_URL="http://localhost:8000"
-```
-
-4. **Run the benchmark script**
-```bash
-cd shopOps
-BENCH_MODELS="gpt-4o,gpt-4.1,gpt-4.1-mini,gpt-4o-mini" \\
-BENCH_SEEDS="1,2,3,4,5,6,7,8,9,10" \\
-python scripts/benchmark_models.py
-```
-
-The script prints a markdown table that matches the benchmark table above.
-
-## Building the Docker Image
+Run tests:
 
 ```bash
-# Standalone build (uses root Dockerfile, no internal base image required)
-docker build -t shopOps-env:latest .
-
-# Or explicitly with the in-repo Dockerfile:
-docker build -t shopOps-env:latest -f server/Dockerfile .
+../venv/bin/python -m pytest -q
 ```
 
-## Running Locally
+Run local server:
 
 ```bash
-uvicorn shopOps.server.app:app --reload --host 0.0.0.0 --port 8000
+uvicorn server.app:app --host 0.0.0.0 --port 8000
 ```
 
-Or:
+Validate OpenEnv packaging:
 
 ```bash
-python -m shopOps.server.app
+../venv/bin/openenv validate
 ```
 
-## Deploying to Hugging Face Spaces
+## Docker
+
+Build:
 
 ```bash
-openenv push
+docker build -t shopops-env:latest .
 ```
 
-## Project Structure
+Run:
 
+```bash
+docker run -p 8000:8000 shopops-env:latest
 ```
-shopOps/
-├── openenv.yaml           # OpenEnv manifest
-├── client.py              # ShopOpsEnv client
-├── models.py              # Action/observation models
-├── eval.py                # Baseline evaluation runner
-└── server/
-    ├── shopOps_environment.py  # Environment logic
-    ├── app.py                  # FastAPI server
-    └── Dockerfile
-```
+
+## Files
+
+Important entrypoints:
+- `server/shopOps_environment.py`
+- `models.py`
+- `graders.py`
+- `eval.py`
+- `inference.py`
+- `openenv.yaml`

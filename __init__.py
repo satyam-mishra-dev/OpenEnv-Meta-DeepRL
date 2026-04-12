@@ -1,52 +1,65 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-#
-# This source code is licensed under the BSD-style license found in the
-# LICENSE file in the root directory of this source tree.
+"""ShopOps environment package exports."""
 
-"""Shopops Environment."""
-
-# Allow importing this module both as a package (relative imports)
-# and as a top-level module (pytest sometimes imports repo-root __init__.py).
 if __package__:
     from .client import ShopopsEnv
     from .models import (
         ActionType,
+        BusinessMetrics,
+        CarrierStatus,
+        CasePriority,
+        CaseStatus,
         CaseType,
+        CaseView,
         CustomerTier,
-        DeliveryStatus,
         EscalationReason,
+        EvidenceStatus,
         FraudSignal,
-        IssueSeverity,
-        ItemCategory,
+        OrderStatus,
+        QueueItemView,
+        Resources,
         ShopopsAction,
         ShopopsObservation,
+        ToolResult,
     )
 else:
     from client import ShopopsEnv
     from models import (
         ActionType,
+        BusinessMetrics,
+        CarrierStatus,
+        CasePriority,
+        CaseStatus,
         CaseType,
+        CaseView,
         CustomerTier,
-        DeliveryStatus,
         EscalationReason,
+        EvidenceStatus,
         FraudSignal,
-        IssueSeverity,
-        ItemCategory,
+        OrderStatus,
+        QueueItemView,
+        Resources,
         ShopopsAction,
         ShopopsObservation,
+        ToolResult,
     )
 
 __all__ = [
-    "ShopopsAction",
-    "ShopopsObservation",
-    "ShopopsEnv",
     "ActionType",
+    "BusinessMetrics",
+    "CarrierStatus",
+    "CasePriority",
+    "CaseStatus",
     "CaseType",
+    "CaseView",
     "CustomerTier",
-    "DeliveryStatus",
     "EscalationReason",
+    "EvidenceStatus",
     "FraudSignal",
-    "IssueSeverity",
-    "ItemCategory",
+    "OrderStatus",
+    "QueueItemView",
+    "Resources",
+    "ShopopsAction",
+    "ShopopsEnv",
+    "ShopopsObservation",
+    "ToolResult",
 ]

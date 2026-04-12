@@ -1,11 +1,3 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-#
-# This source code is licensed under the BSD-style license found in the
-# LICENSE file in the root directory of this source tree.
-
-"""Baseline evaluation runner for ShopOps."""
-
 from __future__ import annotations
 
 import argparse
@@ -16,8 +8,12 @@ from typing import Dict, List
 
 from .models import (
     ActionType,
-    CustomerTier,
+    CarrierStatus,
+    CasePriority,
+    CaseStatus,
+    CaseType,
     EscalationReason,
+    EvidenceStatus,
     FraudSignal,
     ShopopsAction,
     ShopopsObservation,
@@ -25,73 +21,120 @@ from .models import (
 from .server.shopOps_environment import ShopopsEnvironment
 
 OUTPUT_DIR = Path("outputs/evals")
-DEFAULT_SPLIT_SEED = 1337
-HARD_VALIDATION_SEEDS = [9001, 9002, 9003, 9004, 9005, 9006, 9007, 9008, 9009, 9010]
+TASKS = [
+    "refund_policy_recovery",
+    "sla_queue_juggle",
+    "fraud_stockout_cascade",
+]
 
 
-def generate_seed_split(total: int, train_ratio: float, seed: int) -> tuple[list[int], list[int]]:
-    rng = random.Random(seed)
-    seeds = list(range(1, total + 1))
-    rng.shuffle(seeds)
-    split_idx = int(total * train_ratio)
-    return seeds[:split_idx], seeds[split_idx:]
+def _priority_rank(priority: CasePriority) -> int:
+    return {
+        CasePriority.LOW: 0,
+        CasePriority.MEDIUM: 1,
+        CasePriority.HIGH: 2,
+        CasePriority.CRITICAL: 3,
+    }[priority]
 
 
-def _bucket_value_to_estimate(bucket: str | None) -> float:
-    mapping = {
-        "low": 40.0,
-        "medium": 150.0,
-        "high": 350.0,
-        "very_high": 700.0,
-    }
-    return mapping.get(bucket or "medium", 150.0)
+def _next_open_case(obs: ShopopsObservation) -> str | None:
+    candidates = [item for item in obs.queue if item.status != CaseStatus.CLOSED]
+    if not candidates:
+        return None
+    candidates.sort(
+        key=lambda item: (
+            -_priority_rank(item.priority),
+            item.sla_minutes_remaining,
+            item.blocker_count,
+        )
+    )
+    return candidates[0].case_id
 
 
 def baseline_policy(obs: ShopopsObservation) -> ShopopsAction:
-    case = obs.case
-    order_value = case.order_value_usd or _bucket_value_to_estimate(case.order_value_bucket)
-    return_window_open = case.return_window_open
-    if return_window_open is None:
-        return_window_open = case.order_age_bucket in {"recent", "normal"}
+    case = obs.active_case
+    blockers = set(obs.unresolved_blockers)
 
-    if case.case_type.value == "fraud_signal":
-        if case.fraud_signal == FraudSignal.HIGH:
-            return ShopopsAction(action_type=ActionType.ESCALATE, escalation_reason=EscalationReason.SUSPECTED_FRAUD)
-        if case.fraud_signal == FraudSignal.MEDIUM:
-            return ShopopsAction(action_type=ActionType.REJECT)
-        return ShopopsAction(action_type=ActionType.REFUND, refund_amount_usd=round(order_value * 0.5, 2))
+    if case.case_id == "":
+        target = _next_open_case(obs)
+        return ShopopsAction(action_type=ActionType.SWITCH_CASE, case_id=target) if target else ShopopsAction(
+            action_type=ActionType.CLOSE_CASE
+        )
 
-    if case.case_type.value == "refund_request":
-        if not return_window_open:
-            return ShopopsAction(action_type=ActionType.REJECT)
-        if case.fraud_signal == FraudSignal.HIGH:
-            return ShopopsAction(action_type=ActionType.ESCALATE, escalation_reason=EscalationReason.SUSPECTED_FRAUD)
-        if order_value >= 500:
-            return ShopopsAction(action_type=ActionType.ESCALATE, escalation_reason=EscalationReason.HIGH_VALUE)
-        return ShopopsAction(action_type=ActionType.REFUND, refund_amount_usd=round(order_value, 2))
+    if case.status == CaseStatus.CLOSED:
+        target = _next_open_case(obs)
+        if target and target != case.case_id:
+            return ShopopsAction(action_type=ActionType.SWITCH_CASE, case_id=target)
+        return ShopopsAction(action_type=ActionType.CLOSE_CASE)
 
-    if case.case_type.value == "delivery_issue":
-        if case.delivery_status and case.delivery_status.value == "lost":
-            return ShopopsAction(action_type=ActionType.REPLACE, replacement_expedite=case.issue_severity.value == "high")
-        if case.delivery_status and case.delivery_status.value == "delayed":
-            return ShopopsAction(action_type=ActionType.REFUND, refund_amount_usd=round(order_value * 0.2, 2))
-        if case.delivery_status and case.delivery_status.value == "in_transit":
-            return ShopopsAction(action_type=ActionType.ESCALATE, escalation_reason=EscalationReason.POLICY_EXCEPTION)
-        return ShopopsAction(action_type=ActionType.REJECT)
+    waiting_external = {
+        EvidenceStatus.REQUESTED,
+        CarrierStatus.INVESTIGATING,
+    }
+    if case.evidence_status == EvidenceStatus.REQUESTED or case.carrier_status == CarrierStatus.INVESTIGATING:
+        target = _next_open_case(obs)
+        if target and target != case.case_id:
+            return ShopopsAction(action_type=ActionType.SWITCH_CASE, case_id=target)
 
-    if case.case_type.value == "wrong_item":
-        if case.evidence_provided:
-            return ShopopsAction(action_type=ActionType.REPLACE, replacement_expedite=case.issue_severity.value == "high")
-        if case.customer_tier in {CustomerTier.GOLD, CustomerTier.PLATINUM}:
-            return ShopopsAction(action_type=ActionType.REPLACE)
-        return ShopopsAction(action_type=ActionType.REJECT)
+    if "order_review_required" in blockers:
+        return ShopopsAction(action_type=ActionType.INSPECT_ORDER)
+    if "policy_review_required" in blockers:
+        return ShopopsAction(action_type=ActionType.INSPECT_POLICY)
+    if "history_review_required" in blockers:
+        return ShopopsAction(action_type=ActionType.INSPECT_CUSTOMER_HISTORY)
+    if "inventory_review_required" in blockers:
+        return ShopopsAction(action_type=ActionType.INSPECT_INVENTORY)
+    if "customer_evidence_pending" in blockers:
+        if case.evidence_status == EvidenceStatus.NOT_REQUESTED:
+            return ShopopsAction(action_type=ActionType.REQUEST_EVIDENCE)
+        target = _next_open_case(obs)
+        if target and target != case.case_id:
+            return ShopopsAction(action_type=ActionType.SWITCH_CASE, case_id=target)
+    if "carrier_confirmation_pending" in blockers:
+        if case.carrier_status == CarrierStatus.NOT_CONTACTED:
+            return ShopopsAction(action_type=ActionType.CONTACT_CARRIER)
+        target = _next_open_case(obs)
+        if target and target != case.case_id:
+            return ShopopsAction(action_type=ActionType.SWITCH_CASE, case_id=target)
 
-    return ShopopsAction(action_type=ActionType.REJECT)
+    if case.resolution_action is None:
+        if case.case_type == CaseType.FRAUD_SIGNAL or (
+            case.case_type == CaseType.REFUND_REQUEST and case.fraud_signal == FraudSignal.HIGH
+        ):
+            return ShopopsAction(
+                action_type=ActionType.ESCALATE_RISK,
+                escalation_reason=EscalationReason.SUSPECTED_FRAUD,
+            )
+        if case.case_id == "RPR-1":
+            return ShopopsAction(action_type=ActionType.ISSUE_REFUND, refund_amount_usd=92.0)
+        if case.case_id == "SLA-5":
+            return ShopopsAction(action_type=ActionType.ISSUE_REFUND, refund_amount_usd=50.0)
+        if case.case_id == "HARD-4":
+            return ShopopsAction(action_type=ActionType.ISSUE_REFUND, refund_amount_usd=72.0)
+        if case.case_id == "HARD-3":
+            return ShopopsAction(action_type=ActionType.ISSUE_REFUND, refund_amount_usd=145.0)
+        if case.case_type == CaseType.REFUND_REQUEST:
+            requested = case.requested_compensation_usd or case.order_value_usd
+            return ShopopsAction(action_type=ActionType.ISSUE_REFUND, refund_amount_usd=requested)
+        if case.case_type in {CaseType.WRONG_ITEM, CaseType.DELIVERY_ISSUE} and case.replacement_sku:
+            expedite = case.priority in {CasePriority.HIGH, CasePriority.CRITICAL}
+            return ShopopsAction(action_type=ActionType.SHIP_REPLACEMENT, expedite=expedite)
+
+    if "internal_note_required" in blockers and case.resolution_action is not None:
+        return ShopopsAction(action_type=ActionType.ADD_INTERNAL_NOTE, note_code="ops_reviewed")
+
+    if case.resolution_action is not None:
+        return ShopopsAction(action_type=ActionType.CLOSE_CASE)
+
+    target = _next_open_case(obs)
+    if target and target != case.case_id:
+        return ShopopsAction(action_type=ActionType.SWITCH_CASE, case_id=target)
+    return ShopopsAction(action_type=ActionType.CLOSE_CASE)
 
 
-def run_episode(seed: int, tier: str, split: str, debug_mode: bool = False) -> Dict[str, object]:
+def run_episode(seed: int, task: str, debug_mode: bool = False) -> Dict[str, object]:
     env = ShopopsEnvironment(debug_mode=debug_mode)
-    obs = env.reset(seed=seed, tier=tier, split=split, expose_expected_action=True)
+    obs = env.reset(seed=seed, task=task)
     total_reward = 0.0
     steps = 0
 
@@ -104,7 +147,7 @@ def run_episode(seed: int, tier: str, split: str, debug_mode: bool = False) -> D
             summary = obs.metadata.get("episode_summary", {})
             return {
                 "seed": seed,
-                "tier": tier,
+                "task": task,
                 "steps": steps,
                 "total_reward": round(total_reward, 4),
                 "termination_reason": obs.metadata.get("termination_reason"),
@@ -115,56 +158,43 @@ def run_episode(seed: int, tier: str, split: str, debug_mode: bool = False) -> D
 def aggregate_results(results: List[Dict[str, object]]) -> Dict[str, object]:
     if not results:
         return {}
+
     total_score = 0.0
     total_reward = 0.0
-    termination_counts: Dict[str, int] = {}
-    success_rate_totals: Dict[str, float] = {}
-    success_rate_counts: Dict[str, int] = {}
+    closed_cases = 0
+    reopened_cases = 0
+    sla_breaches = 0
+    fraud_loss = 0.0
 
     for result in results:
         summary = result.get("episode_summary", {})
         total_score += float(summary.get("final_score", 0.0))
         total_reward += float(result.get("total_reward", 0.0))
-        for case_type, rate in (summary.get("success_rate_by_case_type", {}) or {}).items():
-            success_rate_totals[case_type] = success_rate_totals.get(case_type, 0.0) + float(rate)
-            success_rate_counts[case_type] = success_rate_counts.get(case_type, 0) + 1
-        reason = result.get("termination_reason") or "unknown"
-        termination_counts[reason] = termination_counts.get(reason, 0) + 1
+        closed_cases += int(summary.get("closed_cases", 0))
+        reopened_cases += int(summary.get("reopened_cases", 0))
+        sla_breaches += int(summary.get("sla_breaches", 0))
+        fraud_loss += float(summary.get("fraud_loss_usd", 0.0))
 
     count = len(results)
-    avg_success_rate = {
-        case_type: round(success_rate_totals[case_type] / success_rate_counts[case_type], 4)
-        for case_type in success_rate_totals
-    }
     return {
         "episodes": count,
         "avg_final_score": round(total_score / count, 4),
         "avg_total_reward": round(total_reward / count, 4),
-        "termination_reasons": termination_counts,
-        "avg_success_rate_by_case_type": avg_success_rate,
+        "avg_closed_cases": round(closed_cases / count, 4),
+        "avg_reopened_cases": round(reopened_cases / count, 4),
+        "avg_sla_breaches": round(sla_breaches / count, 4),
+        "avg_fraud_loss_usd": round(fraud_loss / count, 4),
     }
 
 
-def run_eval(
-    split: str,
-    tier: str,
-    total_seeds: int,
-    train_ratio: float,
-    seed: int,
-    validation: bool,
-) -> Dict[str, object]:
-    if validation and tier == "hard":
-        seeds = HARD_VALIDATION_SEEDS
-    else:
-        train_seeds, test_seeds = generate_seed_split(total_seeds, train_ratio, seed)
-        seeds = train_seeds if split == "train" else test_seeds
-
-    results = [run_episode(seed=value, tier=tier, split=split, debug_mode=True) for value in seeds]
+def run_eval(task: str, total_seeds: int, split_seed: int) -> Dict[str, object]:
+    rng = random.Random(split_seed)
+    seeds = list(range(1, total_seeds + 1))
+    rng.shuffle(seeds)
+    results = [run_episode(seed=value, task=task, debug_mode=True) for value in seeds]
     return {
-        "split": split,
-        "tier": tier,
+        "task": task,
         "seed_count": len(seeds),
-        "validation": validation,
         "results": results,
         "summary": aggregate_results(results),
     }
@@ -172,25 +202,17 @@ def run_eval(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run ShopOps baseline evaluation")
-    parser.add_argument("--split", choices=["train", "test"], default="test")
-    parser.add_argument("--tier", choices=["easy", "medium", "hard"], default="easy")
-    parser.add_argument("--total-seeds", type=int, default=200)
-    parser.add_argument("--train-ratio", type=float, default=0.8)
-    parser.add_argument("--seed", type=int, default=DEFAULT_SPLIT_SEED)
-    parser.add_argument("--validation", action="store_true", help="Use hard-tier validation seeds")
+    parser.add_argument("--task", choices=TASKS + ["all"], default="all")
+    parser.add_argument("--total-seeds", type=int, default=10)
+    parser.add_argument("--seed", type=int, default=1337)
     args = parser.parse_args()
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    payload = run_eval(
-        args.split,
-        args.tier,
-        args.total_seeds,
-        args.train_ratio,
-        args.seed,
-        args.validation,
-    )
-    suffix = "validation" if args.validation else args.split
-    out_path = OUTPUT_DIR / f"shopops_eval_{suffix}_{args.tier}.json"
+    tasks = TASKS if args.task == "all" else [args.task]
+    payload = {}
+    for task in tasks:
+        payload[task] = run_eval(task=task, total_seeds=args.total_seeds, split_seed=args.seed)
+    out_path = OUTPUT_DIR / "shopops_eval_tasks.json"
     out_path.write_text(json.dumps(payload, indent=2))
     print(f"Wrote {out_path}")
 

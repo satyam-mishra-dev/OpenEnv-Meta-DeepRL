@@ -1,42 +1,42 @@
 spec_version: 1
 name: shopOps
 description: >
-  E-commerce support operations environment.
-  Each episode is a 20-case workday queue; the agent triages refund requests,
-  delivery issues, wrong-item complaints, and fraud signals while managing
-  a shared time budget (480 min) and spend budget ($2,000).
+  Tool-driven customer-operations environment for e-commerce support teams.
+  Agents must inspect policies and order facts, manage scarce replacement
+  inventory, juggle SLA pressure across a queue, and avoid fraud or premature
+  closure using the standard OpenEnv step/reset/state interface.
 type: space
 runtime: fastapi
 app: server.app:app
 port: 8000
 
 tasks:
-  - name: easy
+  - name: refund_policy_recovery
     description: >
-      Handle 20 e-commerce support cases with full, unobscured information:
-      exact order values, days-since-order, open/closed return window, and
-      evidence flags are all visible. Tests basic policy correctness.
+      Single-case recovery task. The agent must inspect order and policy data,
+      choose a compliant partial refund, add the required note, and close the
+      case cleanly.
     difficulty: easy
-    grader: graders.ScoreGrader
+    grader: graders.RefundPolicyRecoveryGrader
     reset_parameters:
-      tier: easy
+      task: refund_policy_recovery
 
-  - name: medium
+  - name: sla_queue_juggle
     description: >
-      Handle 20 cases with partial observability: dollar amounts shown as
-      ranges, some fields hidden, fraud signals increasingly ambiguous.
-      Tests adaptation to uncertainty and graceful degradation.
+      Multi-case operations queue. The agent must switch between concurrent
+      cases, prioritize SLA-critical work, inspect inventory and histories, and
+      close five cases without wasting time or budget.
     difficulty: medium
-    grader: graders.ScoreGrader
+    grader: graders.SlaQueueJuggleGrader
     reset_parameters:
-      tier: medium
+      task: sla_queue_juggle
 
-  - name: hard
+  - name: fraud_stockout_cascade
     description: >
-      Handle 20 cases with heavily bucketed/hidden fields, adversarial edge
-      cases injected on the test split, and an extra correctness penalty on
-      the hard tier. Tests robustness and frontier-model decision quality.
+      High-coupling scenario with scarce inventory, suspicious refund behavior,
+      delayed evidence, and cascading consequences from bad early decisions.
+      Tests frontier-model planning quality.
     difficulty: hard
-    grader: graders.ScoreGrader
+    grader: graders.FraudStockoutCascadeGrader
     reset_parameters:
-      tier: hard
+      task: fraud_stockout_cascade

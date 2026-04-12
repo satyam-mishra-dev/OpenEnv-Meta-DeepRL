@@ -1,19 +1,7 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-#
-# This source code is licensed under the BSD-style license found in the
-# LICENSE file in the root directory of this source tree.
-
-"""
-Data models for the ShopOps Environment.
-
-The ShopOps environment simulates e-commerce support operations.
-"""
-
 from __future__ import annotations
 
 from enum import Enum
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from openenv.core.env_server.types import Action, Observation
 from pydantic import BaseModel, Field
@@ -33,17 +21,11 @@ class CustomerTier(str, Enum):
     PLATINUM = "platinum"
 
 
-class DeliveryStatus(str, Enum):
+class OrderStatus(str, Enum):
     DELIVERED = "delivered"
     IN_TRANSIT = "in_transit"
     DELAYED = "delayed"
     LOST = "lost"
-
-
-class IssueSeverity(str, Enum):
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
 
 
 class FraudSignal(str, Enum):
@@ -52,105 +34,172 @@ class FraudSignal(str, Enum):
     HIGH = "high"
 
 
-class ItemCategory(str, Enum):
-    APPAREL = "apparel"
-    ELECTRONICS = "electronics"
-    HOME = "home"
-    BEAUTY = "beauty"
-    GROCERY = "grocery"
+class CasePriority(str, Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
 
 
-class ActionType(str, Enum):
-    REFUND = "refund"
-    REPLACE = "replace"
-    ESCALATE = "escalate"
-    REJECT = "reject"
+class CaseStatus(str, Enum):
+    OPEN = "open"
+    WAITING_CUSTOMER = "waiting_customer"
+    WAITING_CARRIER = "waiting_carrier"
+    RESOLVED = "resolved"
+    CLOSED = "closed"
+    REOPENED = "reopened"
+
+
+class EvidenceStatus(str, Enum):
+    NOT_REQUESTED = "not_requested"
+    REQUESTED = "requested"
+    RECEIVED = "received"
+    INSUFFICIENT = "insufficient"
+
+
+class CarrierStatus(str, Enum):
+    NOT_CONTACTED = "not_contacted"
+    INVESTIGATING = "investigating"
+    APPROVED = "approved"
+    DENIED = "denied"
 
 
 class EscalationReason(str, Enum):
     SUSPECTED_FRAUD = "suspected_fraud"
-    HIGH_VALUE = "high_value"
     POLICY_EXCEPTION = "policy_exception"
-    SAFETY_ISSUE = "safety_issue"
+    SLA_RISK = "sla_risk"
+    VIP_RECOVERY = "vip_recovery"
 
 
-class CaseView(BaseModel):
-    """
-    A partially observable view of a case presented to the agent.
+class ActionType(str, Enum):
+    INSPECT_ORDER = "inspect_order"
+    INSPECT_POLICY = "inspect_policy"
+    INSPECT_INVENTORY = "inspect_inventory"
+    INSPECT_CUSTOMER_HISTORY = "inspect_customer_history"
+    REQUEST_EVIDENCE = "request_evidence"
+    CONTACT_CARRIER = "contact_carrier"
+    ISSUE_REFUND = "issue_refund"
+    SHIP_REPLACEMENT = "ship_replacement"
+    ESCALATE_RISK = "escalate_risk"
+    ADD_INTERNAL_NOTE = "add_internal_note"
+    CLOSE_CASE = "close_case"
+    SWITCH_CASE = "switch_case"
 
-    Fields may be hidden or bucketed depending on difficulty tier.
-    """
 
+class QueueItemView(BaseModel):
     case_id: str = Field(..., description="Unique case identifier")
-    case_type: CaseType = Field(..., description="Type of customer issue")
+    title: str = Field(..., description="Short case summary")
+    case_type: CaseType = Field(..., description="Type of case")
+    status: CaseStatus = Field(..., description="Current case status")
+    priority: CasePriority = Field(..., description="Priority label")
     customer_tier: CustomerTier = Field(..., description="Customer tier")
-    issue_severity: IssueSeverity = Field(..., description="Issue severity")
-    fraud_signal: FraudSignal = Field(..., description="Coarse fraud signal")
-    item_category: ItemCategory = Field(..., description="Item category")
+    sla_minutes_remaining: int = Field(..., ge=0, description="Minutes before SLA breach")
+    blocker_count: int = Field(..., ge=0, description="Outstanding blocker count")
 
-    order_value_usd: Optional[float] = Field(
-        default=None, description="Order value in USD (may be hidden)"
-    )
-    order_value_bucket: Optional[str] = Field(
-        default=None, description="Order value bucket when exact value is hidden"
-    )
-    days_since_order: Optional[int] = Field(
-        default=None, description="Days since order (may be hidden)"
-    )
-    order_age_bucket: Optional[str] = Field(
-        default=None, description="Order age bucket when exact days are hidden"
-    )
-    delivery_status: Optional[DeliveryStatus] = Field(
-        default=None, description="Delivery status for delivery-related issues"
-    )
-    return_window_open: Optional[bool] = Field(
-        default=None, description="Whether return window is open (may be hidden)"
-    )
-    evidence_provided: Optional[bool] = Field(
-        default=None, description="Whether evidence was provided (may be hidden)"
-    )
-    prior_refund_count_bucket: Optional[str] = Field(
-        default=None, description="Bucketed prior refund count (may be hidden)"
-    )
+
+class ToolResult(BaseModel):
+    action_type: Optional[ActionType] = Field(default=None, description="Action just executed")
+    target_case_id: Optional[str] = Field(default=None, description="Target case for the action")
+    outcome: str = Field(default="", description="Human-readable action result")
+    details: Dict[str, object] = Field(default_factory=dict, description="Structured tool payload")
 
 
 class Resources(BaseModel):
-    """Resource tracking for the current episode."""
-
     time_remaining_minutes: int = Field(..., ge=0)
     budget_remaining_usd: float = Field(..., ge=0)
     time_used_minutes: int = Field(..., ge=0)
     budget_used_usd: float = Field(..., ge=0)
+    inventory_units: Dict[str, int] = Field(
+        default_factory=dict,
+        description="Replacement inventory counts by SKU",
+    )
+
+
+class BusinessMetrics(BaseModel):
+    resolved_cases: int = Field(..., ge=0)
+    closed_cases: int = Field(..., ge=0)
+    reopened_cases: int = Field(..., ge=0)
+    sla_breaches: int = Field(..., ge=0)
+    fraud_loss_usd: float = Field(..., ge=0)
+    customer_satisfaction: float = Field(..., ge=0, le=1.0)
+    stockouts: int = Field(..., ge=0)
+
+
+class CaseView(BaseModel):
+    case_id: str = Field(..., description="Unique case identifier")
+    title: str = Field(..., description="Short case title")
+    case_type: CaseType = Field(..., description="Case category")
+    status: CaseStatus = Field(..., description="Current state of the case")
+    priority: CasePriority = Field(..., description="Priority label")
+    customer_tier: CustomerTier = Field(..., description="Customer tier")
+    order_value_usd: float = Field(..., ge=0, description="Order value in USD")
+    days_since_order: int = Field(..., ge=0, description="Days since order creation")
+    order_status: OrderStatus = Field(..., description="Current shipment/order state")
+    fraud_signal: FraudSignal = Field(..., description="Fraud risk estimate")
+    requested_compensation_usd: Optional[float] = Field(
+        default=None,
+        ge=0,
+        description="Customer-requested refund amount when applicable",
+    )
+    replacement_sku: Optional[str] = Field(
+        default=None,
+        description="Replacement SKU if a shipment can be sent",
+    )
+    evidence_status: EvidenceStatus = Field(..., description="Status of customer evidence collection")
+    carrier_status: CarrierStatus = Field(..., description="Status of carrier investigation")
+    order_summary: Optional[str] = Field(default=None, description="Persistent order inspection result")
+    policy_summary: Optional[str] = Field(default=None, description="Persistent policy lookup result")
+    history_summary: Optional[str] = Field(default=None, description="Persistent customer history summary")
+    inventory_summary: Optional[str] = Field(default=None, description="Persistent inventory lookup result")
+    blockers: List[str] = Field(default_factory=list, description="Open blockers before closure")
+    pending_events: List[str] = Field(default_factory=list, description="Known incoming delayed events")
+    completed_checks: List[str] = Field(default_factory=list, description="Checks already performed")
+    notes: List[str] = Field(default_factory=list, description="Internal note codes added to the case")
+    resolution_action: Optional[str] = Field(default=None, description="Recorded resolution action")
+    resolution_summary: Optional[str] = Field(default=None, description="Summary of the current resolution")
 
 
 class ShopopsAction(Action):
-    """Action for the ShopOps environment."""
-
-    action_type: ActionType = Field(..., description="Primary action type")
-    refund_amount_usd: Optional[float] = Field(
-        default=None, ge=0, description="Refund amount in USD (refund only)"
+    action_type: ActionType = Field(..., description="Tool or workflow action to execute")
+    case_id: Optional[str] = Field(
+        default=None,
+        description="Target case identifier. Required for switch_case; otherwise must match the active case if present.",
     )
-    replacement_expedite: bool = Field(
-        default=False, description="Expedite replacement shipping (replace only)"
+    refund_amount_usd: Optional[float] = Field(
+        default=None,
+        ge=0,
+        description="Refund amount for issue_refund",
+    )
+    expedite: bool = Field(
+        default=False,
+        description="Whether replacement shipping should be expedited",
     )
     escalation_reason: Optional[EscalationReason] = Field(
-        default=None, description="Reason for escalation (escalate only)"
+        default=None,
+        description="Reason for escalate_risk",
     )
     note_code: Optional[str] = Field(
-        default=None, description="Optional structured note code"
+        default=None,
+        description="Structured note code for add_internal_note",
     )
 
 
 class ShopopsObservation(Observation):
-    """Observation from the ShopOps environment."""
-
-    case: CaseView = Field(..., description="Current case view")
-    resources: Resources = Field(..., description="Resource state")
-    case_index: int = Field(..., ge=0, description="Index of current case")
-    step_index: int = Field(..., ge=0, description="Step count in episode")
-    episode_id: str = Field(..., description="Episode identifier")
-    tier: str = Field(..., description="Difficulty tier")
-    env_schema_version: str = Field(..., description="Environment schema version")
-    metadata: Dict[str, object] = Field(
-        default_factory=dict, description="Per-step info and metrics"
+    active_case: CaseView = Field(..., description="Current active case")
+    queue: List[QueueItemView] = Field(..., description="Visible work queue")
+    latest_tool_result: Optional[ToolResult] = Field(
+        default=None,
+        description="Result of the last action executed",
     )
+    resources: Resources = Field(..., description="Budget, time, and inventory snapshot")
+    metrics: BusinessMetrics = Field(..., description="Business outcome snapshot")
+    unresolved_blockers: List[str] = Field(
+        default_factory=list,
+        description="Blockers for the active case after the last action",
+    )
+    current_task: str = Field(..., description="Task/scenario identifier")
+    difficulty: str = Field(..., description="Difficulty label")
+    step_index: int = Field(..., ge=0, description="Action count in the episode")
+    episode_id: str = Field(..., description="Episode identifier")
+    env_schema_version: str = Field(..., description="Environment schema version")
+    metadata: Dict[str, object] = Field(default_factory=dict, description="Extended debug metadata")
