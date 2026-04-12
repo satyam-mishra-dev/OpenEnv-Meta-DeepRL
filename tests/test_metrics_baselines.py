@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from shopOps.graders import (
+    FraudStockoutCascadeGrader,
+    RefundPolicyRecoveryGrader,
+    SlaQueueJuggleGrader,
+)
 from shopOps.eval import TASKS, aggregate_results, run_episode
 
 
@@ -29,3 +34,20 @@ def test_baseline_scores_are_monotonic_by_difficulty_seed_1() -> None:
         for task in TASKS
     ]
     assert scores[0] >= scores[1] >= scores[2]
+
+
+def test_graders_return_open_interval_scores() -> None:
+    graders = [
+        RefundPolicyRecoveryGrader(),
+        SlaQueueJuggleGrader(),
+        FraudStockoutCascadeGrader(),
+    ]
+    trajectories = [
+        [],
+        [{"reward": 999.0}],
+        [{"reward": -999.0}],
+    ]
+    for grader in graders:
+        for trajectory in trajectories:
+            score = grader.grade(trajectory)
+            assert 0.0 < score < 1.0
