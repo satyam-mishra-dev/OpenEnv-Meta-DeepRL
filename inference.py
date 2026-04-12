@@ -39,6 +39,8 @@ MAX_TOTAL_REWARD = {
     "sla_queue_juggle": 5.4,
     "fraud_stockout_cascade": 7.6,
 }
+SCORE_MIN = 1e-9
+SCORE_MAX = 1.0 - 1e-9
 
 SYSTEM_PROMPT = (
     "You are operating a customer-ops command center. Return ONLY a JSON object with keys: "
@@ -82,6 +84,10 @@ def _log_end(success: bool, steps: int, score: float, rewards: List[float]) -> N
         f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}",
         flush=True,
     )
+
+
+def _open_interval_score(value: float) -> float:
+    return max(SCORE_MIN, min(SCORE_MAX, value))
 
 
 def _parse_action(text: str) -> Dict[str, Any]:
@@ -260,7 +266,7 @@ def _run_task(client: OpenAI, task: str) -> None:
             _log_step(step=step, action=action_str, reward=reward, done=done, error=error)
 
         score = sum(rewards) / MAX_TOTAL_REWARD[task] if MAX_TOTAL_REWARD[task] > 0 else 0.0
-        score = max(0.0, min(1.0, score))
+        score = _open_interval_score(score)
         success = score >= 0.4
     finally:
         _log_end(success=success, steps=steps_taken, score=score, rewards=rewards)

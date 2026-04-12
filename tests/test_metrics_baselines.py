@@ -27,6 +27,7 @@ def test_eval_aggregate_metrics() -> None:
     assert "avg_final_score" in summary
     assert "avg_total_reward" in summary
     assert "avg_closed_cases" in summary
+    assert 0.0 < summary["avg_final_score"] < 1.0
 
 
 def test_baseline_scores_are_monotonic_by_difficulty_seed_1() -> None:

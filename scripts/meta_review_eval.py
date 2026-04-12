@@ -22,6 +22,8 @@ NORMALIZATION_CAPS = {
     "sla_queue_juggle": 5.4,
     "fraud_stockout_cascade": 7.6,
 }
+SCORE_MIN = 1e-9
+SCORE_MAX = 1.0 - 1e-9
 
 
 @dataclass
@@ -34,6 +36,10 @@ class EpisodeStats:
 
 
 PolicyFn = Callable[[ShopopsObservation], ShopopsAction]
+
+
+def _open_interval_score(value: float) -> float:
+    return max(SCORE_MIN, min(SCORE_MAX, value))
 
 
 def _run_policy(task: str, seed: int, policy: PolicyFn) -> EpisodeStats:
@@ -52,7 +58,7 @@ def _run_policy(task: str, seed: int, policy: PolicyFn) -> EpisodeStats:
             return EpisodeStats(
                 total_reward=round(total_reward, 4),
                 normalized_reward=round(
-                    max(0.0, min(1.0, total_reward / NORMALIZATION_CAPS[task])),
+                    _open_interval_score(total_reward / NORMALIZATION_CAPS[task]),
                     4,
                 ),
                 final_score=float(summary.get("final_score", 0.0)),

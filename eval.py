@@ -21,6 +21,8 @@ from .models import (
 from .server.shopOps_environment import ShopopsEnvironment
 
 OUTPUT_DIR = Path("outputs/evals")
+SCORE_MIN = 1e-9
+SCORE_MAX = 1.0 - 1e-9
 TASKS = [
     "refund_policy_recovery",
     "sla_queue_juggle",
@@ -31,6 +33,10 @@ TIER_TO_TASK = {
     "medium": "sla_queue_juggle",
     "hard": "fraud_stockout_cascade",
 }
+
+
+def _open_interval_score(value: float) -> float:
+    return max(SCORE_MIN, min(SCORE_MAX, value))
 
 
 def _priority_rank(priority: CasePriority) -> int:
@@ -204,9 +210,10 @@ def aggregate_results(results: List[Dict[str, object]]) -> Dict[str, object]:
         fraud_loss += float(summary.get("fraud_loss_usd", 0.0))
 
     count = len(results)
+    avg_final_score = _open_interval_score(total_score / count)
     return {
         "episodes": count,
-        "avg_final_score": round(total_score / count, 4),
+        "avg_final_score": avg_final_score,
         "avg_total_reward": round(total_reward / count, 4),
         "avg_closed_cases": round(closed_cases / count, 4),
         "avg_reopened_cases": round(reopened_cases / count, 4),

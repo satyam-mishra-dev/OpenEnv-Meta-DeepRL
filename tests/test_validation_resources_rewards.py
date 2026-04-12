@@ -6,6 +6,7 @@ from shopOps.models import (
     ShopopsAction,
 )
 from shopOps.server.shopOps_environment import ShopopsEnvironment
+from shopOps.eval import baseline_policy, TASKS
 
 
 def test_validation_missing_refund_amount() -> None:
@@ -69,3 +70,21 @@ def test_escalation_requires_reason() -> None:
 
     obs = env.step(ShopopsAction(action_type=ActionType.ESCALATE_RISK))
     assert obs.metadata["last_action_error"] == "escalation_reason_required"
+
+
+def test_all_returned_rewards_stay_in_open_interval() -> None:
+    for task in TASKS:
+        env = ShopopsEnvironment(debug_mode=True)
+        obs = env.reset(seed=1, task=task)
+        while True:
+            obs = env.step(baseline_policy(obs))
+            assert obs.reward is not None
+            assert 0.0 < obs.reward < 1.0
+            if obs.done:
+                break
+
+        env = ShopopsEnvironment(debug_mode=True)
+        env.reset(seed=1, task=task)
+        invalid = env.step(ShopopsAction(action_type=ActionType.CLOSE_CASE))
+        assert invalid.reward is not None
+        assert 0.0 < invalid.reward < 1.0

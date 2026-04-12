@@ -55,6 +55,7 @@ ENV_SCHEMA_VERSION = "2.0.0"
 INVALID_LIMIT = 4
 SCORE_MIN = 1e-9
 SCORE_MAX = 1.0 - 1e-9
+STEP_REWARD_MIN = 0.01
 TASK_ALIASES = {
     "easy": "refund_policy_recovery",
     "medium": "sla_queue_juggle",
@@ -336,7 +337,7 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
 
         if self._is_done():
             return self._build_observation(
-                reward=0.0,
+                reward=STEP_REWARD_MIN,
                 done=True,
                 info={"already_done": True, "termination_reason": self._termination_reason()},
             )
@@ -349,7 +350,7 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
             self._state.step_count += 1
             self._advance_events()
             self._update_sla_breaches()
-            reward = -0.25
+            reward = STEP_REWARD_MIN
             self._cumulative_reward += reward
             self._latest_tool_result = ToolResult(
                 action_type=action.action_type,
@@ -364,8 +365,8 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
                 "last_action_error": validation_error,
                 "reward_breakdown": {
                     "information_gain": 0.0,
-                    "workflow_progress": -0.15,
-                    "business_outcome": -0.1,
+                    "workflow_progress": STEP_REWARD_MIN,
+                    "business_outcome": STEP_REWARD_MIN,
                 },
             }
             if done:
@@ -793,9 +794,9 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
         del action
         if "order" in case.completed_checks:
             return ActionOutcome(
-                reward=-0.03,
+                reward=0.02,
                 summary="Order details were already inspected.",
-                details={"reward_breakdown": {"information_gain": -0.03}},
+                details={"reward_breakdown": {"information_gain": 0.02}},
             )
         case.completed_checks.add("order")
         case.order_summary = case.order_details_text
@@ -812,9 +813,9 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
         del action
         if "policy" in case.completed_checks:
             return ActionOutcome(
-                reward=-0.03,
+                reward=0.02,
                 summary="Policy details were already inspected.",
-                details={"reward_breakdown": {"information_gain": -0.03}},
+                details={"reward_breakdown": {"information_gain": 0.02}},
             )
         case.completed_checks.add("policy")
         case.policy_summary = case.policy_details_text or "No special policy guidance for this case."
@@ -832,9 +833,9 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
         del action
         if "inventory" in case.completed_checks:
             return ActionOutcome(
-                reward=-0.03,
+                reward=0.02,
                 summary="Inventory was already inspected.",
-                details={"reward_breakdown": {"information_gain": -0.03}},
+                details={"reward_breakdown": {"information_gain": 0.02}},
             )
         case.completed_checks.add("inventory")
         sku = case.replacement_sku or "none"
@@ -853,9 +854,9 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
         del action
         if "history" in case.completed_checks:
             return ActionOutcome(
-                reward=-0.03,
+                reward=0.02,
                 summary="Customer history was already inspected.",
-                details={"reward_breakdown": {"information_gain": -0.03}},
+                details={"reward_breakdown": {"information_gain": 0.02}},
             )
         case.completed_checks.add("history")
         case.history_summary = case.history_details_text or "No significant customer history was found."
@@ -873,21 +874,21 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
         del action
         if not case.needs_evidence:
             return ActionOutcome(
-                reward=-0.05,
+                reward=0.01,
                 summary="This case does not require customer evidence.",
-                details={"reward_breakdown": {"workflow_progress": -0.05}},
+                details={"reward_breakdown": {"workflow_progress": 0.01}},
             )
         if case.evidence_status == EvidenceStatus.REQUESTED:
             return ActionOutcome(
-                reward=-0.03,
+                reward=0.02,
                 summary="Evidence request is already pending.",
-                details={"reward_breakdown": {"workflow_progress": -0.03}},
+                details={"reward_breakdown": {"workflow_progress": 0.02}},
             )
         if case.evidence_status in {EvidenceStatus.RECEIVED, EvidenceStatus.INSUFFICIENT}:
             return ActionOutcome(
-                reward=-0.02,
+                reward=0.02,
                 summary="Evidence result is already available.",
-                details={"reward_breakdown": {"workflow_progress": -0.02}},
+                details={"reward_breakdown": {"workflow_progress": 0.02}},
             )
         case.evidence_status = EvidenceStatus.REQUESTED
         case.status = CaseStatus.WAITING_CUSTOMER
@@ -912,21 +913,21 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
         del action
         if not case.needs_carrier_contact:
             return ActionOutcome(
-                reward=-0.05,
+                reward=0.01,
                 summary="Carrier contact is not needed for this case.",
-                details={"reward_breakdown": {"workflow_progress": -0.05}},
+                details={"reward_breakdown": {"workflow_progress": 0.01}},
             )
         if case.carrier_status == CarrierStatus.INVESTIGATING:
             return ActionOutcome(
-                reward=-0.03,
+                reward=0.02,
                 summary="Carrier investigation is already pending.",
-                details={"reward_breakdown": {"workflow_progress": -0.03}},
+                details={"reward_breakdown": {"workflow_progress": 0.02}},
             )
         if case.carrier_status in {CarrierStatus.APPROVED, CarrierStatus.DENIED}:
             return ActionOutcome(
-                reward=-0.02,
+                reward=0.02,
                 summary="Carrier result is already available.",
-                details={"reward_breakdown": {"workflow_progress": -0.02}},
+                details={"reward_breakdown": {"workflow_progress": 0.02}},
             )
         case.carrier_status = CarrierStatus.INVESTIGATING
         case.status = CaseStatus.WAITING_CARRIER
@@ -956,13 +957,13 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
         fit = self._refund_fit(case, amount)
         workflow = self._check_coverage(case)
         business = 0.22 + fit
-        workflow_reward = 0.08 if workflow >= 1.0 else max(-0.08, 0.08 * (workflow - 1.0))
+        workflow_reward = 0.08 if workflow >= 1.0 else max(0.01, 0.08 * workflow)
         if case.fraud_signal == FraudSignal.HIGH and case.evidence_status in {
             EvidenceStatus.NOT_REQUESTED,
             EvidenceStatus.REQUESTED,
         }:
             business -= 0.18
-        reward = max(-0.2, business + workflow_reward)
+        reward = max(STEP_REWARD_MIN, business + workflow_reward)
         case.resolution_summary = f"Refund of ${amount:.2f} prepared."
         return ActionOutcome(
             reward=reward,
@@ -982,9 +983,9 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
         if units <= 0:
             self._stockouts += 1
             return ActionOutcome(
-                reward=-0.2,
+                reward=STEP_REWARD_MIN,
                 summary="Replacement failed because inventory is exhausted.",
-                details={"reward_breakdown": {"business_outcome": -0.2}},
+                details={"reward_breakdown": {"business_outcome": STEP_REWARD_MIN}},
             )
         self._inventory[sku] = units - 1
         case.resolution_action = ActionType.SHIP_REPLACEMENT
@@ -995,7 +996,7 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
         workflow = self._check_coverage(case)
         expedite_bonus = 0.08 if action.expedite == case.preferred_expedite else -0.04
         resolution_bonus = 0.26 if case.preferred_resolution == ActionType.SHIP_REPLACEMENT else -0.12
-        reward = max(-0.2, resolution_bonus + expedite_bonus + 0.06 * workflow)
+        reward = max(STEP_REWARD_MIN, resolution_bonus + expedite_bonus + 0.06 * workflow)
         case.resolution_summary = (
             f"Replacement for {sku} queued{' with expedite' if action.expedite else ''}."
         )
@@ -1038,9 +1039,9 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
         note_code = action.note_code or "general_note"
         if note_code in case.notes:
             return ActionOutcome(
-                reward=-0.02,
+                reward=0.02,
                 summary="That note already exists on the case.",
-                details={"reward_breakdown": {"workflow_progress": -0.02}},
+                details={"reward_breakdown": {"workflow_progress": 0.02}},
             )
         case.notes.append(note_code)
         reward = 0.05 if case.requires_note else 0.01
@@ -1070,12 +1071,12 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
         )
         case.resolution_summary = case.resolution_summary or "Case closed."
         return ActionOutcome(
-            reward=max(-0.25, reward),
+            reward=max(STEP_REWARD_MIN, reward),
             summary=f"Case {case.case_id} closed.",
             details={
                 "reward_breakdown": {
                     "workflow_progress": 0.12,
-                    "business_outcome": max(-0.37, reward - 0.12),
+                    "business_outcome": max(STEP_REWARD_MIN, reward - 0.12),
                 },
                 "closure_quality": round(quality, 4),
                 "remaining_blockers": blockers,
@@ -1087,15 +1088,15 @@ class ShopopsEnvironment(Environment[ShopopsAction, ShopopsObservation, State]):
         target = self._case_by_id(action.case_id or "")
         if target is None:
             return ActionOutcome(
-                reward=-0.1,
+                reward=STEP_REWARD_MIN,
                 summary="Cannot switch because the target case does not exist.",
-                details={"reward_breakdown": {"workflow_progress": -0.1}},
+                details={"reward_breakdown": {"workflow_progress": STEP_REWARD_MIN}},
             )
         if target.case_id == self._active_case_id:
             return ActionOutcome(
-                reward=-0.02,
+                reward=0.02,
                 summary="The target case is already active.",
-                details={"reward_breakdown": {"workflow_progress": -0.02}},
+                details={"reward_breakdown": {"workflow_progress": 0.02}},
             )
         current = self._active_case()
         self._active_case_id = target.case_id
